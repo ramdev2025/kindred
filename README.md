@@ -1,6 +1,6 @@
+![Kindred AI Studio](kindredaistudio.png)
 
-
-# Vibe Coding Webapp
+# Kindred AI Studio
 
 A full-stack webapp that lets users build applications via natural-language vibe coding. Uses intelligent AI model routing between Gemini 2.5 Pro, GPT-5.4, and a Hermes reasoning agent. Code executes in secure E2B cloud sandboxes with live previews.
 
