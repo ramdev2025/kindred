@@ -30,10 +30,10 @@ This document outlines everything needed to evolve the Vibe Coding Webapp from i
 ### What's Still Missing / Non-Functional
 - No real user profile sync from Clerk (webhook)
 - Queue workers don't process jobs end-to-end (stubs only)
-- No error recovery or retry UI
+- ~~No error recovery or retry UI~~ → Next.js error boundaries (global-error, error, not-found, app-level)
 - No mobile responsiveness
 - No tests (unit or E2E)
-- File storage is disk-based, not cloud (GCS/S3)
+- ~~File storage is disk-based, not cloud (GCS/S3)~~ → now Vercel Blob
 - No CI/CD pipeline
 - Not deployed (no live demo URL)
 
@@ -61,13 +61,12 @@ This document outlines everything needed to evolve the Vibe Coding Webapp from i
 - ~~Display build errors in the Terminal and feed them back to the AI for auto-fix~~
 - Fully implemented in `deployPipeline.ts` + agentic loop error feedback
 
-### 1.4 Persistent File Storage (Partially Done)
-**Priority: High**
+### 1.4 Persistent File Storage ✅ DONE
 - ~~Replace in-memory file store~~ → now disk-based (uploads directory)
-- Still needed: cloud storage (GCS or S3) for production
-- Associate uploaded files with project IDs in the database
-- Allow re-referencing previous uploads in conversation context
-- Add file size and quota limits per user
+- ~~Cloud storage for production~~ → Vercel Blob via `@vercel/blob` with local fallback
+- ~~Associate uploaded files with project IDs in the database~~ → `project_files` table (migration 003)
+- ~~Add file size and quota limits per user~~ → 100MB per user, 10MB per file
+- Remaining: allow re-referencing previous uploads in conversation context
 
 ### 1.5 Conversation Persistence ✅ DONE
 - ~~Chat history is saved to DB but never loaded on page revisit~~
@@ -131,12 +130,13 @@ This document outlines everything needed to evolve the Vibe Coding Webapp from i
 - Implemented via `POST /api/chat/agentic` + `agenticLoop.ts` with streaming phases
 - Remaining: collapsible "Thinking..." UI sections
 
-### 3.3 Context Window Management
-**Priority: High**
-- Track token usage per conversation
-- Implement automatic summarization when context exceeds limits
-- Prioritize recent messages + project files in context
-- Show token usage meter in the UI
+### 3.3 Context Window Management ✅ DONE
+- ~~Track token usage per conversation~~ → `contextManager.ts` + `usage_stats` table
+- ~~Implement automatic summarization when context exceeds limits~~ → fire-and-forget at 75% budget
+- ~~Prioritize recent messages + project files in context~~ → newest-first fill with summary prefix
+- ~~Show token usage meter in the UI~~ → `TokenMeter.tsx` component with color-coded progress bar
+- Implemented via `contextManager.ts`, `session_summaries` table, per-model budgets (Gemini 100K, GPT 90K, Hermes 24K)
+- Remaining: inject relevant project source files into context (RAG-style)
 
 ### 3.4 Custom System Prompts
 **Priority: Medium**
@@ -288,7 +288,7 @@ This document outlines everything needed to evolve the Vibe Coding Webapp from i
 | `cache.ts` | Basic get/set with graceful fallback | Cache invalidation strategy, cache warming, per-user cache isolation, cache hit rate metrics |
 | `queue.ts` | BullMQ setup (stubs) | Real job processors, job progress tracking, dead letter queue, job result storage, webhook on completion |
 | `googleSearch.ts` | Basic Gemini search | Rate limiting, result caching, search history, custom search scopes |
-| `upload.ts` | **Disk-based storage** ✅ | Cloud storage backend, virus scanning, image optimization, PDF text extraction for non-Gemini models |
+| `upload.ts` | **Vercel Blob + local fallback** ✅ | Virus scanning, image optimization, PDF text extraction for non-Gemini models |
 | `auth.ts` | JWT verification | User sync webhook from Clerk, role-based permissions, API key auth for programmatic access |
 | `mcpClient.ts` | **Full MCP client (HTTP)** ✅ | stdio transport, error recovery |
 | `agenticLoop.ts` | **Full agentic pipeline** ✅ | Observability, step-level metrics |
@@ -345,4 +345,4 @@ CREATE TABLE templates (
 
 ---
 
-*Last updated: May 2025 — 8 of 10 immediate next steps completed.*
+*Last updated: May 2025 — 8 of 10 immediate next steps completed. Phase 3.3 (Context Window Management) and Phase 1.4 (Persistent File Storage) now complete.*

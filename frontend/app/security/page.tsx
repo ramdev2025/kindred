@@ -77,7 +77,7 @@ export default function SecurityPage() {
               <Link href="/dashboard" className="text-[15px] font-medium text-white/80 hover:text-white transition-colors">
                 Dashboard
               </Link>
-              <UserButton afterSignOutUrl="/" />
+              <UserButton />
             </>
           )}
         </div>

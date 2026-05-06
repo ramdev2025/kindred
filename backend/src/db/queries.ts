@@ -123,10 +123,148 @@ export async function deleteMCPConnection(connId: string, userId: string) {
   );
 }
 
+// --- OAuth Tokens ---
+
+export async function upsertOAuthToken(
+  userId: string,
+  provider: string,
+  data: {
+    accessToken: string;
+    refreshToken?: string | null;
+    expiresAt?: Date | null;
+    scopes?: string[];
+    rawResponse?: Record<string, any>;
+  },
+) {
+  const result = await query(
+    `INSERT INTO oauth_tokens
+       (user_id, provider, access_token, refresh_token, expires_at, scopes, raw_response, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+     ON CONFLICT (user_id, provider) DO UPDATE SET
+       access_token  = EXCLUDED.access_token,
+       refresh_token = COALESCE(EXCLUDED.refresh_token, oauth_tokens.refresh_token),
+       expires_at    = EXCLUDED.expires_at,
+       scopes        = EXCLUDED.scopes,
+       raw_response  = EXCLUDED.raw_response,
+       updated_at    = NOW()
+     RETURNING *`,
+    [
+      userId,
+      provider,
+      data.accessToken,
+      data.refreshToken ?? null,
+      data.expiresAt ?? null,
+      data.scopes ?? [],
+      JSON.stringify(data.rawResponse ?? {}),
+    ],
+  );
+  return result.rows[0];
+}
+
+export async function getOAuthToken(userId: string, provider: string) {
+  const result = await query(
+    'SELECT * FROM oauth_tokens WHERE user_id = $1 AND provider = $2',
+    [userId, provider],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function deleteOAuthToken(userId: string, provider: string) {
+  await query(
+    'DELETE FROM oauth_tokens WHERE user_id = $1 AND provider = $2',
+    [userId, provider],
+  );
+}
+
+// --- Session Summaries ---
+
+export async function getLatestSummary(sessionId: string) {
+  const result = await query(
+    'SELECT * FROM session_summaries WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1',
+    [sessionId],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function saveSessionSummary(
+  sessionId: string,
+  summaryText: string,
+  summarizedUpTo: string,
+  tokensInSummary: number,
+) {
+  const result = await query(
+    `INSERT INTO session_summaries (session_id, summary_text, summarized_up_to, tokens_in_summary)
+     VALUES ($1, $2, $3, $4) RETURNING *`,
+    [sessionId, summaryText, summarizedUpTo, tokensInSummary],
+  );
+  return result.rows[0];
+}
+
+export async function getSessionTokenUsage(sessionId: string): Promise<number> {
+  const result = await query(
+    `SELECT COALESCE(SUM(tokens_used), 0)::int AS total
+     FROM chat_messages WHERE session_id = $1`,
+    [sessionId],
+  );
+  return Number(result.rows[0]?.total ?? 0);
+}
+
 // --- Usage Stats ---
 export async function recordUsage(userId: string, model: string, tokensInput: number, tokensOutput: number, requestType: string) {
   await query(
     'INSERT INTO usage_stats (user_id, model, tokens_input, tokens_output, request_type) VALUES ($1, $2, $3, $4, $5)',
     [userId, model, tokensInput, tokensOutput, requestType]
   );
+}
+
+// --- Project Files ---
+
+export async function saveProjectFile(
+  projectId: string,
+  userId: string,
+  filename: string,
+  mimeType: string,
+  sizeBytes: number,
+  blobUrl: string,
+) {
+  const result = await query(
+    `INSERT INTO project_files (project_id, user_id, filename, mime_type, size_bytes, blob_url)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+    [projectId, userId, filename, mimeType, sizeBytes, blobUrl],
+  );
+  return result.rows[0];
+}
+
+export async function getProjectFiles(projectId: string) {
+  const result = await query(
+    'SELECT * FROM project_files WHERE project_id = $1 ORDER BY created_at DESC',
+    [projectId],
+  );
+  return result.rows;
+}
+
+export async function deleteProjectFile(fileId: string) {
+  const result = await query(
+    'SELECT blob_url FROM project_files WHERE id = $1',
+    [fileId],
+  );
+  await query('DELETE FROM project_files WHERE id = $1', [fileId]);
+  return result.rows[0]?.blob_url ?? null;
+}
+
+export async function getUserStorageUsage(userId: string): Promise<number> {
+  const result = await query(
+    `SELECT COALESCE(SUM(size_bytes), 0)::bigint AS total_bytes
+     FROM project_files WHERE user_id = $1`,
+    [userId],
+  );
+  return Number(result.rows[0]?.total_bytes ?? 0);
+}
+
+export async function getProjectFileByBlobUrl(blobUrl: string) {
+  const result = await query(
+    'SELECT * FROM project_files WHERE blob_url = $1',
+    [blobUrl],
+  );
+  return result.rows[0] ?? null;
 }

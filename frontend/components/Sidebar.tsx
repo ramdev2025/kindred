@@ -15,7 +15,7 @@ import {
 
 interface SidebarProps {
   projects: Array<{ id: string; name: string }>;
-  onNewProject: () => void;
+  onNewProject?: () => void;
 }
 
 export default function Sidebar({ projects }: SidebarProps) {

@@ -2,6 +2,17 @@ import axios from 'axios';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
+// Context stats returned by the backend after each AI response
+export interface ContextStats {
+  messagesIncluded: number;
+  estimatedTokens: number;
+  totalSessionTokens: number;
+  budget: number;
+  usagePercent: number;
+  hasSummary: boolean;
+  shouldSummarize: boolean;
+}
+
 export const api = axios.create({
   baseURL: API_BASE,
   headers: { 'Content-Type': 'application/json' },
@@ -74,7 +85,7 @@ export async function streamMessage(
   attachments?: Array<{ fileId: string }>,
   onToken?: (token: string) => void,
   onInfo?: (info: any) => void,
-  onDone?: (data: { model: string; tokensUsed: number; sessionId?: string }) => void,
+  onDone?: (data: { model: string; tokensUsed: number; sessionId?: string; contextStats?: ContextStats }) => void,
   onError?: (error: string) => void
 ) {
   const response = await fetch(`${API_BASE}/api/chat/stream`, {
@@ -137,7 +148,7 @@ export async function streamMessage(
 export interface AgenticCallbacks {
   onToken?: (token: string) => void;
   onInfo?: (info: any) => void;
-  onAiDone?: (data: { model: string; tokensUsed: number; sessionId?: string }) => void;
+  onAiDone?: (data: { model: string; tokensUsed: number; sessionId?: string; contextStats?: ContextStats }) => void;
   onIterationStart?: (data: { iteration: number; maxIterations: number }) => void;
   onDeployLog?: (line: string) => void;
   onDeployResult?: (data: { success: boolean; previewUrl?: string | null; error?: string }) => void;

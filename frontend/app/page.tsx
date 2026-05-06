@@ -36,7 +36,7 @@ const TEMPLATES = [
 ];
 
 export default function LandingPage() {
-  const { isLoaded, userId, isSignedIn } = useUser();
+  const { isLoaded, user, isSignedIn } = useUser();
   const router = useRouter();
   const [prompt, setPrompt] = useState("");
 
@@ -103,7 +103,7 @@ export default function LandingPage() {
               <Link href="/dashboard" className="text-[15px] font-medium text-white/80 hover:text-white transition-colors">
                 Dashboard
               </Link>
-              <UserButton afterSignOutUrl="/" />
+              <UserButton />
             </>
           )}
         </div>

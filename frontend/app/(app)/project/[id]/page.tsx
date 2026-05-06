@@ -3,7 +3,7 @@
 import { useAuth } from "@clerk/nextjs";
 import { useParams, useSearchParams } from "next/navigation";
 import { useEffect, useState, useRef } from "react";
-import { sendMessage, streamMessage, streamAgenticMessage, createSandbox, uploadFiles, fetchSandboxFiles, readSandboxFile, executeSandboxCommand, fetchPreviewUrl, getChatHistory, getProjectSession, deployFiles } from "@/lib/api";
+import { sendMessage, streamMessage, streamAgenticMessage, createSandbox, uploadFiles, fetchSandboxFiles, readSandboxFile, executeSandboxCommand, fetchPreviewUrl, getChatHistory, getProjectSession, deployFiles, ContextStats } from "@/lib/api";
 import PromptBar from "@/components/PromptBar";
 import MessageBubble from "@/components/MessageBubble";
 import LivePreview from "@/components/LivePreview";
@@ -11,6 +11,7 @@ import CodeEditor from "@/components/CodeEditor";
 import FileTree from "@/components/FileTree";
 import Terminal from "@/components/Terminal";
 import TopBar from "@/components/TopBar";
+import TokenMeter from "@/components/TokenMeter";
 import {
   Eye,
   Code2,
@@ -52,6 +53,7 @@ export default function ProjectWorkspace() {
   const [initialPromptSent, setInitialPromptSent] = useState(false);
   const [sandboxFiles, setSandboxFiles] = useState<Array<{ name: string; type: 'file' | 'dir'; path: string }>>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [contextStats, setContextStats] = useState<ContextStats | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // Tracks sandboxId in a ref so async callbacks always get the latest value
@@ -332,6 +334,7 @@ USER REQUEST: ${message}`;
                   msg.id === assistantId ? { ...msg, model: data.model } : msg
                 )
               );
+              if (data.contextStats) setContextStats(data.contextStats);
               // Update code editor with first detected file
               const detectedFiles = parseCodeFiles(captured.content);
               if (detectedFiles.length > 0) {
@@ -428,6 +431,7 @@ USER REQUEST: ${message}`;
               msg.id === assistantId ? { ...msg, model: data.model } : msg
             )
           );
+          if (data.contextStats) setContextStats(data.contextStats);
 
           // Parse code files from the full response
           const detectedFiles = parseCodeFiles(captured.content);
@@ -484,16 +488,19 @@ USER REQUEST: ${message}`;
         <div className="w-[420px] flex flex-col border-r border-[var(--border)] shrink-0">
           {/* Model selector */}
           <div className="px-4 py-2.5 border-b border-[var(--border)] flex items-center justify-between shrink-0">
-            <select
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              className="text-xs bg-[var(--muted)] border border-[var(--border)] rounded-md px-2.5 py-1.5 text-zinc-300 focus:outline-none focus:border-indigo-500"
-            >
-              <option value="auto">Auto Route</option>
-              <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
-              <option value="gpt-5.4">GPT-5.4</option>
-              <option value="hermes">Hermes (Deep)</option>
-            </select>
+            <div className="flex items-center gap-3">
+              <select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                className="text-xs bg-[var(--muted)] border border-[var(--border)] rounded-md px-2.5 py-1.5 text-zinc-300 focus:outline-none focus:border-indigo-500"
+              >
+                <option value="auto">Auto Route</option>
+                <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                <option value="gpt-5.4">GPT-5.4</option>
+                <option value="hermes">Hermes (Deep)</option>
+              </select>
+              <TokenMeter contextStats={contextStats} />
+            </div>
             {!sandboxId && (
               <button
                 onClick={handleStartSandbox}

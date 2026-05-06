@@ -73,7 +73,7 @@ mcpRouter.delete('/connections/:id', async (req: AuthenticatedRequest, res: Resp
     const user = await db.getUserByClerkId(req.clerkId!);
     if (!user) return res.status(401).json({ error: 'User not found' });
 
-    await db.deleteMCPConnection(req.params.id!, user.id);
+    await db.deleteMCPConnection(req.params.id as string, user.id);
     res.json({ success: true });
   } catch (err: any) {
     console.error('[MCP] delete error:', err.message);
@@ -85,7 +85,7 @@ mcpRouter.delete('/connections/:id', async (req: AuthenticatedRequest, res: Resp
 /** Ping the MCP server and report tool count */
 mcpRouter.post('/connections/:id/test', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const row = await db.getMCPConnectionById(req.params.id!);
+    const row = await db.getMCPConnectionById(req.params.id as string);
     if (!row) return res.status(404).json({ error: 'Connection not found' });
 
     const result = await testMCPConnection(rowToConfig(row));
@@ -100,7 +100,7 @@ mcpRouter.post('/connections/:id/test', async (req: AuthenticatedRequest, res: R
 /** List all tools exposed by a registered MCP server */
 mcpRouter.get('/connections/:id/tools', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const row = await db.getMCPConnectionById(req.params.id!);
+    const row = await db.getMCPConnectionById(req.params.id as string);
     if (!row) return res.status(404).json({ error: 'Connection not found' });
 
     const tools = await fetchMCPTools(rowToConfig(row));
@@ -122,7 +122,7 @@ mcpRouter.post('/connections/:id/call', async (req: AuthenticatedRequest, res: R
 
     if (!toolName) return res.status(400).json({ error: 'toolName is required' });
 
-    const row = await db.getMCPConnectionById(req.params.id!);
+    const row = await db.getMCPConnectionById(req.params.id as string);
     if (!row) return res.status(404).json({ error: 'Connection not found' });
 
     const result = await callMCPTool(rowToConfig(row), toolName, toolInput);
