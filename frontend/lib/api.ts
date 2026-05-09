@@ -366,3 +366,69 @@ export async function deployFiles(
     }
   }
 }
+
+// --- Billing & Usage API (Phase 6.1) ---
+
+export interface UsageSummary {
+  tier: string;
+  tokens: { used: number; limit: number; remaining: number };
+  sandboxes: { used: number; limit: number; remaining: number };
+  projects: { current: number; limit: number };
+  billingCycleStart: string;
+}
+
+export async function fetchUsage(token: string): Promise<UsageSummary> {
+  const res = await api.get('/api/billing/usage', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data.usage;
+}
+
+export interface PricingTier {
+  id: string;
+  name: string;
+  price: number;
+  tokens: number;
+  sandboxes: number;
+  projects: number;
+  features: string[];
+}
+
+export async function fetchPricingTiers(): Promise<PricingTier[]> {
+  const res = await api.get('/api/billing/tiers');
+  return res.data.tiers;
+}
+
+// --- Templates API (Phase 6.4) ---
+
+export interface Template {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  tech_stack: string[];
+  files: { prompt?: string };
+  use_count: number;
+  is_builtin: number;
+  created_at: string;
+}
+
+export async function fetchTemplates(category?: string): Promise<Template[]> {
+  const params = category ? `?category=${encodeURIComponent(category)}` : '';
+  const res = await api.get(`/api/templates${params}`);
+  return res.data.templates;
+}
+
+export async function fetchTemplateById(token: string, templateId: string): Promise<Template> {
+  const res = await api.get(`/api/templates/${templateId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data.template;
+}
+
+export async function useTemplate(token: string, templateId: string, projectName?: string, customPrompt?: string) {
+  const res = await api.post(`/api/templates/${templateId}/use`, { projectName, customPrompt }, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data as { project: any; initialPrompt: string; template: { id: string; name: string; category: string } };
+}

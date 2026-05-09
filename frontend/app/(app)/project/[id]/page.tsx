@@ -12,6 +12,8 @@ import FileTree from "@/components/FileTree";
 import Terminal from "@/components/Terminal";
 import TopBar from "@/components/TopBar";
 import TokenMeter from "@/components/TokenMeter";
+import { useToast } from "@/components/ToastProvider";
+import { useKeyboardShortcuts } from "@/components/KeyboardShortcuts";
 import {
   Eye,
   Code2,
@@ -33,12 +35,24 @@ interface Message {
   searchSources?: Array<{ title: string; url: string }>;
 }
 
+import { Suspense } from "react";
+
 type RightTab = "preview" | "code" | "terminal";
 
-export default function ProjectWorkspace() {
+export default function ProjectPage() {
+  return (
+    <Suspense>
+      <ProjectWorkspace />
+    </Suspense>
+  );
+}
+
+function ProjectWorkspace() {
   const { id } = useParams<{ id: string }>();
   const searchParams = useSearchParams();
   const { getToken } = useAuth();
+  const toast = useToast();
+  const { registerShortcut } = useKeyboardShortcuts();
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -61,6 +75,43 @@ export default function ProjectWorkspace() {
   // AbortController for cancelling an in-progress agentic loop
   const agenticAbortRef = useRef<AbortController | null>(null);
   const [agenticStatus, setAgenticStatus] = useState<string | null>(null);
+
+  // ── Register Keyboard Shortcuts (Phase 4.5) ──────────────────────────────
+  useEffect(() => {
+    registerShortcut({
+      key: "b",
+      meta: true,
+      label: "Toggle File Tree",
+      description: "Show or hide the file panel",
+      category: "Workspace",
+      action: () => setShowFiles((prev) => !prev),
+    });
+    registerShortcut({
+      key: "p",
+      meta: true,
+      shift: true,
+      label: "Toggle Preview",
+      description: "Switch to preview panel",
+      category: "Workspace",
+      action: () => setRightTab("preview"),
+    });
+    registerShortcut({
+      key: "j",
+      meta: true,
+      label: "Toggle Terminal",
+      description: "Switch to terminal panel",
+      category: "Workspace",
+      action: () => setRightTab("terminal"),
+    });
+    registerShortcut({
+      key: "e",
+      meta: true,
+      label: "Toggle Code Editor",
+      description: "Switch to code editor panel",
+      category: "Workspace",
+      action: () => setRightTab("code"),
+    });
+  }, [registerShortcut]);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -171,15 +222,18 @@ export default function ProjectWorkspace() {
     try {
       const token = await getToken();
       if (token) {
+        toast.info("Starting sandbox...", "Setting up your cloud environment");
         const result = await createSandbox(token, id);
         setSandboxId(result.sandboxId);
         sandboxIdRef.current = result.sandboxId;   // keep ref in sync
         setPreviewUrl(result.url);
         setTerminalOutput((prev) => [...prev, `[System] Sandbox started: ${result.sandboxId}`]);
         await refreshFiles(token, result.sandboxId);
+        toast.success("Sandbox ready!", "Your cloud environment is live");
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to create sandbox:", err);
+      toast.error("Sandbox failed", err.message || "Could not start the sandbox");
     }
   }
 
@@ -483,9 +537,9 @@ USER REQUEST: ${message}`;
     <div className="flex-1 flex flex-col overflow-hidden">
       <TopBar sandboxActive={!!sandboxId} currentModel={currentModel} />
 
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden workspace-panels">
         {/* Left panel - Chat */}
-        <div className="w-[420px] flex flex-col border-r border-[var(--border)] shrink-0">
+        <div className="w-[420px] flex flex-col border-r border-[var(--border)] shrink-0 chat-panel">
           {/* Model selector */}
           <div className="px-4 py-2.5 border-b border-[var(--border)] flex items-center justify-between shrink-0">
             <div className="flex items-center gap-3">
@@ -586,7 +640,7 @@ USER REQUEST: ${message}`;
         </div>
 
         {/* Right panel */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 flex flex-col overflow-hidden right-panel">
           {/* Tabs */}
           <div className="px-4 py-2 border-b border-[var(--border)] flex items-center gap-1 shrink-0">
             <button
@@ -615,7 +669,7 @@ USER REQUEST: ${message}`;
           {/* Content */}
           <div className="flex-1 flex overflow-hidden">
             {showFiles && (
-              <div className="w-[200px] border-r border-[var(--border)] overflow-y-auto shrink-0">
+              <div className="w-[200px] border-r border-[var(--border)] overflow-y-auto shrink-0 file-panel">
                 <div className="px-3 py-2 border-b border-[var(--border)]">
                   <div className="flex items-center gap-1.5">
                     <FolderTree className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />

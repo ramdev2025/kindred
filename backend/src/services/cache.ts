@@ -1,88 +1,120 @@
-import Redis from 'ioredis';
+/**
+ * SQLite-backed cache — zero-dependency replacement for Redis.
+ *
+ * Uses the existing SQLite database with a dedicated `cache_entries` table.
+ * TTL is enforced on read (expired entries are deleted lazily).
+ * A periodic sweep removes stale entries to prevent unbounded growth.
+ *
+ * This provides persistent caching that survives server restarts,
+ * unlike the previous Redis-based approach that was effectively optional.
+ */
+import { getSQLite } from '../db/sqlite';
 
-let redis: Redis | null = null;
-let redisAvailable = false;
+let initialized = false;
 
-export async function initRedis(): Promise<void> {
+function ensureCacheTable() {
+  if (initialized) return;
+  const db = getSQLite();
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS cache_entries (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_cache_expires ON cache_entries(expires_at);
+  `);
+  initialized = true;
+}
+
+// ── Periodic cleanup (every 5 minutes) ──────────────────────────────────────
+let sweepInterval: ReturnType<typeof setInterval> | null = null;
+
+export function startCacheSweep(intervalMs = 300_000) {
+  if (sweepInterval) return;
+  sweepInterval = setInterval(() => {
+    try {
+      const db = getSQLite();
+      const now = Math.floor(Date.now() / 1000);
+      const info = db.prepare('DELETE FROM cache_entries WHERE expires_at < ?').run(now);
+      if ((info.changes as number) > 0) {
+        console.log(`[Cache] Swept ${info.changes} expired entries`);
+      }
+    } catch { /* ignore sweep failures */ }
+  }, intervalMs);
+  sweepInterval.unref(); // Don't keep the process alive for cleanup
+}
+
+// ── Public API (same signatures as the old Redis-backed module) ─────────────
+
+const DEFAULT_TTL = 3600; // 1 hour in seconds
+
+/**
+ * Initialize the cache system. Called during server startup.
+ * Replaces the old `initRedis()` — always succeeds since it uses SQLite.
+ */
+export async function initCache(): Promise<void> {
   try {
-    redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
-      maxRetriesPerRequest: 3,
-      connectTimeout: 5000,
-      retryStrategy(times) {
-        if (times > 3) {
-          console.warn('[Cache] Redis unavailable, running without cache');
-          return null; // stop retrying
-        }
-        return Math.min(times * 50, 2000);
-      },
-    });
-
-    // Wait for connection or timeout
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Redis connection timeout'));
-      }, 5000);
-
-      redis!.on('connect', () => {
-        clearTimeout(timeout);
-        redisAvailable = true;
-        console.log('[Cache] Redis connected');
-        resolve();
-      });
-
-      redis!.on('error', (err) => {
-        clearTimeout(timeout);
-        console.warn('[Cache] Redis error:', err.message);
-        reject(err);
-      });
-    });
+    ensureCacheTable();
+    startCacheSweep();
+    console.log('[Cache] SQLite-backed cache initialized');
   } catch (err: any) {
-    console.warn('[Cache] Redis not available, running without cache:', err.message);
-    redisAvailable = false;
-    redis = null;
+    console.warn('[Cache] Failed to initialize:', err.message);
   }
 }
 
-export function getRedis(): Redis | null {
-  return redis;
-}
-
-export function isRedisAvailable(): boolean {
-  return redisAvailable;
-}
-
-const DEFAULT_TTL = 3600; // 1 hour
-
 export async function getCached(key: string): Promise<string | null> {
-  if (!redisAvailable || !redis) return null;
   try {
-    return await redis.get(`cache:${key}`);
+    ensureCacheTable();
+    const db = getSQLite();
+    const now = Math.floor(Date.now() / 1000);
+    const row = db.prepare('SELECT value, expires_at FROM cache_entries WHERE key = ?').get(`cache:${key}`) as
+      | { value: string; expires_at: number }
+      | undefined;
+
+    if (!row) return null;
+
+    // Lazy expiration check
+    if (row.expires_at < now) {
+      db.prepare('DELETE FROM cache_entries WHERE key = ?').run(`cache:${key}`);
+      return null;
+    }
+
+    return row.value;
   } catch {
     return null;
   }
 }
 
 export async function setCache(key: string, value: string, ttl = DEFAULT_TTL): Promise<void> {
-  if (!redisAvailable || !redis) return;
   try {
-    await redis.set(`cache:${key}`, value, 'EX', ttl);
+    ensureCacheTable();
+    const db = getSQLite();
+    const expiresAt = Math.floor(Date.now() / 1000) + ttl;
+    db.prepare(
+      'INSERT OR REPLACE INTO cache_entries (key, value, expires_at) VALUES (?, ?, ?)'
+    ).run(`cache:${key}`, value, expiresAt);
   } catch {
-    // silently ignore cache write failures
+    // Silently ignore cache write failures
   }
 }
 
 export async function invalidateCache(pattern: string): Promise<void> {
-  if (!redisAvailable || !redis) return;
   try {
-    const keys = await redis.keys(`cache:${pattern}`);
-    if (keys.length > 0) {
-      await redis.del(...keys);
-    }
+    ensureCacheTable();
+    const db = getSQLite();
+    // SQLite LIKE for simple wildcard patterns (convert Redis-style * to %)
+    const likePattern = `cache:${pattern.replace(/\*/g, '%')}`;
+    db.prepare('DELETE FROM cache_entries WHERE key LIKE ?').run(likePattern);
   } catch {
-    // silently ignore
+    // Silently ignore
   }
 }
 
 export function buildCacheKey(parts: string[]): string {
   return parts.join(':');
+}
+
+/** Backwards-compat: always returns true since SQLite is always available */
+export function isRedisAvailable(): boolean {
+  return true;
 }

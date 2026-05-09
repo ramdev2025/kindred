@@ -1,12 +1,13 @@
 "use client";
 
 import { useAuth, useUser } from "@clerk/nextjs";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { fetchProjects, createProject, deleteProject } from "@/lib/api";
 import ProjectCard from "@/components/ProjectCard";
 import PromptBar from "@/components/PromptBar";
 import TopBar from "@/components/TopBar";
+import { useToast } from "@/components/ToastProvider";
 import { Sparkles, Folder, ArrowRight, Bot } from "lucide-react";
 
 interface Project {
@@ -18,11 +19,20 @@ interface Project {
   updated_at: string;
 }
 
-export default function DashboardHome() {
+export default function DashboardPage() {
+  return (
+    <Suspense>
+      <DashboardHome />
+    </Suspense>
+  );
+}
+
+function DashboardHome() {
   const { getToken, isLoaded: isAuthLoaded } = useAuth();
   const { user } = useUser();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const toast = useToast();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -56,6 +66,7 @@ export default function DashboardHome() {
 
     const name = prompt.length > 40 ? prompt.slice(0, 40) + "..." : prompt;
     const project = await createProject(token, name, prompt);
+    toast.success("Project created!", `"${name}" is ready`);
     router.push(`/project/${project.id}?prompt=${encodeURIComponent(prompt)}&mode=${mode || "build"}`);
   }
 
@@ -64,6 +75,7 @@ export default function DashboardHome() {
     if (token) {
       await deleteProject(token, id);
       setProjects(projects.filter((p) => p.id !== id));
+      toast.success("Project deleted");
     }
   }
 

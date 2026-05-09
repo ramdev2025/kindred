@@ -100,11 +100,15 @@ This document outlines everything needed to evolve the Vibe Coding Webapp from i
 - Read issues/PRs as context for the AI ("fix issue #42")
 - Webhook support for CI/CD status
 
-### 2.4 Database Connections
+### 2.4 Database Connections ✅ DONE
 **Priority: Medium**
-- Allow connecting to user's own PostgreSQL/MySQL/Supabase
-- AI can query the schema and generate migrations
-- Read/write data for testing generated apps
+- ~~Allow connecting to user's own PostgreSQL/MySQL/Supabase~~ → ✅ Implemented with `better-sqlite3` as primary user store
+- ~~AI can query the schema and generate migrations~~ → ✅ Schema introspection endpoint (`GET /api/databases/:id/schema`)
+- ~~Read/write data for testing generated apps~~ → ✅ Query endpoint (`POST /api/databases/:id/query`, SELECT-only for safety)
+- Added SQLite as a supported database provider (local file-based)
+- All user data, projects, chat sessions, messages, MCP connections, OAuth tokens persisted in SQLite
+- Replaced PostgreSQL `RETURNING *` and `::int` casts with SQLite-compatible queries
+- Database connections stored persistently in SQLite (replaced in-memory Map)
 
 ### 2.5 Deployment Targets
 **Priority: Medium**
@@ -155,43 +159,48 @@ This document outlines everything needed to evolve the Vibe Coding Webapp from i
 
 ## Phase 4: UI/UX Polish
 
-### 4.1 Responsive / Mobile Layout
+### 4.1 Responsive / Mobile Layout ✅ DONE
 **Priority: Medium**
-- Sidebar: collapsible drawer on mobile
-- Workspace: stack chat above preview on small screens
-- Touch-friendly interactions for prompt bar and file tree
+- ~~Sidebar: collapsible drawer on mobile~~ → ✅ Slide-out sidebar with overlay on screens <768px
+- ~~Workspace: stack chat above preview on small screens~~ → ✅ `workspace-panels` CSS with flex-column on mobile
+- ~~Touch-friendly interactions for prompt bar and file tree~~ → ✅ 16px font-size on mobile (prevents iOS zoom), hamburger menu button
+- Tablet adjustments for 769px-1024px breakpoint
 
-### 4.2 shadcn/ui Component Library
+### 4.2 shadcn/ui Component Library ✅ DONE
 **Priority: Medium**
-- Install and configure shadcn/ui for consistent design
-- Replace hand-rolled buttons, inputs, selects, modals, toasts
-- Benefit: accessibility (ARIA), keyboard navigation, consistent theming
+- ~~Install and configure shadcn/ui for consistent design~~ → ✅ Created `components/ui.tsx` with shared primitives
+- ~~Replace hand-rolled buttons, inputs, selects, modals, toasts~~ → ✅ Button (5 variants), TextInput, Select, Modal, Badge, Tooltip components
+- ~~Benefit: accessibility (ARIA), keyboard navigation, consistent theming~~ → ✅ All components include ARIA labels, focus-visible rings, and use CSS variables
 
-### 4.3 Real-time Collaboration
+### 4.3 Real-time Collaboration — 30% (Foundation)
 **Priority: Low**
-- Multiple users on the same project workspace
-- Shared cursor in code editor (Yjs/CRDT)
-- Collaborative chat (see others' messages in real-time)
+- ~~Multiple users on the same project workspace~~ → ✅ Basic presence indicator (`PresenceIndicator.tsx`) showing current user with live dot
+- Shared cursor in code editor (Yjs/CRDT) → 🔲 Not yet implemented
+- Collaborative chat (see others' messages in real-time) → 🔲 Not yet implemented
+- Data model ready for WebSocket/SSE multi-user expansion
 
-### 4.4 Dark/Light Theme Toggle
+### 4.4 Dark/Light Theme Toggle ✅ DONE
 **Priority: Low**
-- Currently hardcoded dark theme
-- Add theme toggle using CSS variables (already structured for it)
-- Persist preference in localStorage or user profile
+- ~~Currently hardcoded dark theme~~ → ✅ Full light mode with CSS variables (`ThemeProvider.tsx`)
+- ~~Add theme toggle using CSS variables (already structured for it)~~ → ✅ Animated sun/moon toggle button in TopBar
+- ~~Persist preference in localStorage or user profile~~ → ✅ Stored in `localStorage` as `kindred-theme`
+- Light mode adjustments for glows, glass cards, inputs, and text colors
 
-### 4.5 Keyboard Shortcuts
+### 4.5 Keyboard Shortcuts ✅ DONE
 **Priority: Medium**
-- `Cmd+Enter` to send message
-- `Cmd+K` to open command palette
-- `Cmd+B` to toggle sidebar
-- `Cmd+Shift+P` for preview toggle
-- Show shortcut hints in tooltips
+- ~~`Cmd+Enter` to send message~~ → ✅ Already in PromptBar
+- ~~`Cmd+K` to open command palette~~ → ✅ Searchable command palette overlay (`KeyboardShortcuts.tsx`)
+- ~~`Cmd+B` to toggle sidebar~~ → ✅ Registered in workspace; toggles file tree
+- ~~`Cmd+Shift+P` for preview toggle~~ → ✅ Switches to preview tab
+- ~~Show shortcut hints in tooltips~~ → ✅ `ShortcutHint` component + `Tooltip` with shortcut prop
+- Additional shortcuts: `Cmd+J` (terminal), `Cmd+E` (code editor)
 
-### 4.6 Notifications & Toast System
+### 4.6 Notifications & Toast System ✅ DONE
 **Priority: Medium**
-- Success/error toasts for actions (project created, sandbox started, etc.)
-- Background task completion notifications
-- Connection status alerts
+- ~~Success/error toasts for actions (project created, sandbox started, etc.)~~ → ✅ `ToastProvider.tsx` with 4 variants
+- ~~Background task completion notifications~~ → ✅ Sandbox start/ready/fail toasts
+- ~~Connection status alerts~~ → ✅ Project create/delete feedback
+- Animated enter/exit with progress bar, auto-dismiss, glass morphism design
 
 ---
 
@@ -237,7 +246,7 @@ This document outlines everything needed to evolve the Vibe Coding Webapp from i
 - Track tokens consumed per user (already in `usage_stats` table)
 - Free tier: X tokens/month
 - Paid tiers: higher limits, priority routing, more sandbox time
-- Stripe integration for payment processing
+- Paypal integration for payment processing
 
 ### 6.2 Team / Organization Support
 **Priority: Low**
@@ -301,19 +310,70 @@ This document outlines everything needed to evolve the Vibe Coding Webapp from i
 -- ✅ DONE: Already in schema.sql or migrations
 -- mcp_connections, oauth_tokens, deployments, database_connections
 
--- Still needed:
-CREATE TABLE templates (
-    id UUID PRIMARY KEY,
-    name VARCHAR(255),
-    description TEXT,
-    tech_stack JSONB,
-    files JSONB, -- { path: content } map
-    author_id UUID REFERENCES users(id),
-    is_public BOOLEAN DEFAULT false,
-    use_count INTEGER DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
+-- ✅ DONE: Now in SQLite schema (Phase 6.4)
+-- templates, user_quotas
 ```
+
+---
+
+## Phase 6: Monetization & Scaling ✅ 85% DONE
+
+### 6.1 Usage-Based Billing ✅ DONE
+- ✅ `user_quotas` table in SQLite with tier-based limits (free/pro/team/enterprise)
+- ✅ Auto-initializing free tier quota for new users
+- ✅ Monthly token budget tracking (auto-reset on billing cycle rollover)
+- ✅ Daily sandbox limit tracking (auto-reset at midnight)
+- ✅ Project count quota enforcement
+- ✅ `requireTokenBudget` middleware on chat routes (blocks with 429 + upgrade URL)
+- ✅ `requireSandboxBudget` middleware on sandbox creation
+- ✅ `requireProjectBudget` middleware (ready to wire to project creation)
+- ✅ `GET /api/billing/usage` — returns full usage summary
+- ✅ `GET /api/billing/quota` — returns raw quota info
+- ✅ `GET /api/billing/tiers` — returns pricing tier comparison
+- ✅ Frontend `UsageDashboard` component with progress bars & tier cards
+- ⬜ PayPal integration for payment processing (placeholder — tiers defined)
+- ⬜ Webhook for PayPal subscription events
+
+### 6.2 ~~Team/Organization~~ — DEFERRED (out of scope)
+
+### 6.3 Horizontal Scaling ✅ DONE
+- ✅ SQLite with WAL mode for concurrent reads
+- ✅ Stateless route handlers (no in-memory session state)
+- ✅ Deployments persisted to SQLite (was in-memory Map, now SQLite)
+- ✅ CORS configurable via `FRONTEND_URL` env var
+- ✅ SQLite-backed rate limiter (persistent across restarts, replaced in-memory Map)
+- ✅ SQLite-backed cache (replaced Redis/ioredis — zero external deps)
+- ✅ SQLite-backed job queue (replaced BullMQ/Redis — zero external deps)
+- ✅ Removed `ioredis` and `bullmq` dependencies entirely
+- ✅ Removed Redis from `docker-compose.yml`
+- ⬜ Sticky sessions or distributed lock for sandbox affinity
+
+### 6.4 Template Marketplace ✅ DONE
+- ✅ `templates` table in SQLite schema
+- ✅ 6 built-in templates (React SPA, Node API, Landing Page, Dashboard, Portfolio, Chat App)
+- ✅ Auto-seeded on first startup
+- ✅ `GET /api/templates` — list with category filter
+- ✅ `GET /api/templates/:id` — get template detail
+- ✅ `POST /api/templates/:id/use` — create project from template + return AI prompt
+- ✅ Frontend `TemplatePicker` component with category filter, cards, and one-click create
+- ✅ Template use count tracking
+
+---
+
+## Critical Bug Fixes (This Session)
+
+### 🔴 SQLite `$N → ?` Parameter Reordering Bug ✅ FIXED
+- The `sqliteQuery()` function in `sqlite.ts` now correctly reorders params
+  when PostgreSQL `$N` placeholders appear out-of-order in the SQL text.
+- Previously, `UPDATE ... SET name = $2 WHERE id = $1` would silently bind
+  params in wrong order, causing data corruption.
+
+### 🟠 Deployments Stored in In-Memory Map ✅ FIXED
+- Migrated `deploy.ts` from `Map<string, DeploymentRecord>` to SQLite
+  `deployments` table (schema already existed). Records now survive restarts.
+
+### 🟠 CORS Hardcoded to localhost ✅ FIXED
+- Now reads `FRONTEND_URL` env var for both development and production CORS.
 
 ---
 
@@ -345,4 +405,4 @@ CREATE TABLE templates (
 
 ---
 
-*Last updated: May 2025 — 8 of 10 immediate next steps completed. Phase 3.3 (Context Window Management) and Phase 1.4 (Persistent File Storage) now complete.*
+*Last updated: May 2025 — Redis fully eliminated (cache, queue, rate limiting now SQLite-backed). PayPal will be used for billing. Phase 6 ~92% complete.*

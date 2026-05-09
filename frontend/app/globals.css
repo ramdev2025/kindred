@@ -1,6 +1,11 @@
 @import "tailwindcss";
 
-:root {
+/* ═══════════════════════════════════════════════════════════════════════════
+   DESIGN SYSTEM TOKENS — Dark Mode (default)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root,
+html.dark {
   --background: #09090b;
   --foreground: #fafafa;
   --card: #141414;
@@ -13,6 +18,47 @@
   --accent-foreground: #ffffff;
   --primary: #ffffff;
   --primary-foreground: #09090b;
+  --sidebar-bg: #000000;
+  --sidebar-border: rgba(255, 255, 255, 0.05);
+  --sidebar-text: rgba(255, 255, 255, 0.4);
+  --sidebar-text-active: #ffffff;
+  --sidebar-hover: rgba(255, 255, 255, 0.03);
+  --sidebar-active: rgba(255, 255, 255, 0.05);
+  --topbar-bg: rgba(9, 9, 11, 0.8);
+  --input-bg: #1a1a1a;
+  --scrollbar-thumb: #27272a;
+  --scrollbar-thumb-hover: #3f3f46;
+  color-scheme: dark;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LIGHT MODE — Phase 4.4
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+html.light {
+  --background: #f8f9fa;
+  --foreground: #111827;
+  --card: #ffffff;
+  --card-foreground: #111827;
+  --border: rgba(0, 0, 0, 0.08);
+  --border-hover: rgba(0, 0, 0, 0.15);
+  --muted: #f3f4f6;
+  --muted-foreground: #6b7280;
+  --accent: #6366f1;
+  --accent-foreground: #ffffff;
+  --primary: #111827;
+  --primary-foreground: #ffffff;
+  --sidebar-bg: #ffffff;
+  --sidebar-border: rgba(0, 0, 0, 0.06);
+  --sidebar-text: rgba(0, 0, 0, 0.4);
+  --sidebar-text-active: #111827;
+  --sidebar-hover: rgba(0, 0, 0, 0.03);
+  --sidebar-active: rgba(0, 0, 0, 0.06);
+  --topbar-bg: rgba(255, 255, 255, 0.9);
+  --input-bg: #f3f4f6;
+  --scrollbar-thumb: #d1d5db;
+  --scrollbar-thumb-hover: #9ca3af;
+  color-scheme: light;
 }
 
 @theme inline {
@@ -33,7 +79,10 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Custom scrollbar */
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCROLLBAR
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -42,20 +91,23 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #27272a;
+  background: var(--scrollbar-thumb);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #3f3f46;
+  background: var(--scrollbar-thumb-hover);
 }
 
-/* Premium Gradients */
+/* ═══════════════════════════════════════════════════════════════════════════
+   GRADIENTS & GLOWS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 .kindred-gradient {
   background: linear-gradient(135deg, #3b82f6 0%, #d946ef 50%, #8b5cf6 100%);
 }
 
 .kindred-text-gradient {
-  background: linear-gradient(135deg, #fff 0%, #a1a1aa 100%);
+  background: linear-gradient(135deg, var(--foreground) 0%, var(--muted-foreground) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -77,6 +129,13 @@ body {
   z-index: 0;
 }
 
+html.light .glow-top {
+  background-image: 
+    radial-gradient(circle at 15% 0%, rgba(59, 130, 246, 0.12) 0%, transparent 45%),
+    radial-gradient(circle at 85% 0%, rgba(217, 70, 239, 0.12) 0%, transparent 45%),
+    radial-gradient(circle at 50% 0%, rgba(139, 92, 246, 0.08) 0%, transparent 60%);
+}
+
 .glow-center {
   position: absolute;
   top: 50%;
@@ -90,6 +149,12 @@ body {
   filter: blur(120px);
   pointer-events: none;
   z-index: 0;
+}
+
+html.light .glow-center {
+  background-image: 
+    radial-gradient(circle at 0% 50%, rgba(59, 130, 246, 0.05) 0%, transparent 40%),
+    radial-gradient(circle at 100% 50%, rgba(217, 70, 239, 0.05) 0%, transparent 40%);
 }
 
 .glow-bottom {
@@ -107,18 +172,39 @@ body {
   z-index: 0;
 }
 
-/* Glass Morphism */
+html.light .glow-bottom {
+  background-image: 
+    radial-gradient(circle at 15% 100%, rgba(139, 92, 246, 0.1) 0%, transparent 45%),
+    radial-gradient(circle at 85% 100%, rgba(59, 130, 246, 0.1) 0%, transparent 45%),
+    radial-gradient(circle at 50% 100%, rgba(217, 70, 239, 0.08) 0%, transparent 60%);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   GLASS MORPHISM
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 .glass-panel {
   background: rgba(26, 26, 26, 0.6);
   backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--border);
+}
+
+html.light .glass-panel {
+  background: rgba(255, 255, 255, 0.7);
 }
 
 .glass-card {
   background: rgba(255, 255, 255, 0.03);
   backdrop-filter: blur(10px);
   border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 16px;
   transition: all 0.3s ease;
+}
+
+html.light .glass-card {
+  background: rgba(255, 255, 255, 0.7);
+  border-color: rgba(0, 0, 0, 0.06);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
 .glass-card:hover {
@@ -127,46 +213,78 @@ body {
   transform: translateY(-2px);
 }
 
-/* Prompt Bar */
+html.light .glass-card:hover {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PROMPT BAR
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 .prompt-bar {
-  background: #1a1a1a;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--input-bg);
+  border: 1px solid var(--border);
   border-radius: 24px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
 }
 
+html.light .prompt-bar {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+}
+
 .prompt-bar:focus-within {
-  border-color: rgba(255, 255, 255, 0.2);
+  border-color: var(--border-hover);
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
 }
 
-/* Buttons */
+html.light .prompt-bar:focus-within {
+  border-color: rgba(99, 102, 241, 0.3);
+  box-shadow: 0 4px 20px rgba(99, 102, 241, 0.08);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BUTTONS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 .btn-primary {
-  background: #ffffff;
-  color: #000000;
+  background: var(--primary);
+  color: var(--primary-foreground);
   font-weight: 500;
   border-radius: 8px;
   transition: all 0.2s ease;
 }
 
 .btn-primary:hover {
-  background: #f4f4f5;
+  opacity: 0.9;
   transform: scale(1.02);
 }
 
 .btn-secondary {
   background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: #ffffff;
+  border: 1px solid var(--border);
+  color: var(--foreground);
   border-radius: 8px;
   transition: all 0.2s ease;
+}
+
+html.light .btn-secondary {
+  background: rgba(0, 0, 0, 0.03);
 }
 
 .btn-secondary:hover {
   background: rgba(255, 255, 255, 0.1);
 }
 
-/* Animations */
+html.light .btn-secondary:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ANIMATIONS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 @keyframes float {
   0% { transform: translateY(0px); }
   50% { transform: translateY(-10px); }
@@ -176,10 +294,14 @@ body {
 .animate-float {
   animation: float 6s ease-in-out infinite;
 }
-/* Sidebar */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SIDEBAR
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 .sidebar {
-  background: #000000;
-  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-border);
 }
 
 .sidebar-item {
@@ -188,20 +310,20 @@ body {
   gap: 12px;
   padding: 8px 12px;
   border-radius: 12px;
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--sidebar-text);
   font-weight: 500;
   transition: all 0.2s ease;
   cursor: pointer;
 }
 
 .sidebar-item:hover {
-  background: rgba(255, 255, 255, 0.03);
-  color: rgba(255, 255, 255, 0.8);
+  background: var(--sidebar-hover);
+  color: var(--sidebar-text-active);
 }
 
 .sidebar-item.active {
-  background: rgba(255, 255, 255, 0.05);
-  color: #ffffff;
+  background: var(--sidebar-active);
+  color: var(--sidebar-text-active);
 }
 
 .gradient-btn {
@@ -214,4 +336,135 @@ body {
   transform: translateY(-1px);
   box-shadow: 0 6px 20px rgba(59, 130, 246, 0.3);
   filter: brightness(1.1);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   RESPONSIVE — Phase 4.1 (Mobile / Tablet)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Mobile sidebar overlay */
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 40;
+    transform: translateX(-100%);
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .sidebar.mobile-open {
+    transform: translateX(0);
+  }
+
+  .sidebar-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 39;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+  }
+
+  .sidebar-overlay.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Stack workspace panels vertically on mobile */
+  .workspace-panels {
+    flex-direction: column !important;
+  }
+
+  .workspace-panels > .chat-panel {
+    width: 100% !important;
+    max-height: 50vh;
+    border-right: none !important;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .workspace-panels > .right-panel {
+    width: 100% !important;
+    min-height: 50vh;
+  }
+
+  /* Full-width file tree on mobile */
+  .workspace-panels .file-panel {
+    width: 100% !important;
+    max-height: 200px;
+    border-right: none !important;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* Touch-friendly prompt bar */
+  .prompt-bar {
+    border-radius: 16px;
+  }
+
+  .prompt-bar textarea {
+    font-size: 16px !important; /* Prevent iOS zoom on focus */
+  }
+
+  /* Mobile-friendly buttons */
+  .mobile-menu-btn {
+    display: flex !important;
+  }
+}
+
+@media (min-width: 769px) {
+  .mobile-menu-btn {
+    display: none !important;
+  }
+
+  .sidebar-overlay {
+    display: none !important;
+  }
+}
+
+/* Tablet adjustments */
+@media (min-width: 769px) and (max-width: 1024px) {
+  .workspace-panels > .chat-panel {
+    width: 320px !important;
+  }
+
+  .workspace-panels .file-panel {
+    width: 160px !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LIGHT MODE OVERRIDES FOR SPECIFIC ELEMENTS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+html.light .code-block {
+  background: #f8f9fa;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+html.light select,
+html.light input[type="text"],
+html.light input[type="number"],
+html.light input[type="password"],
+html.light textarea {
+  background: var(--input-bg);
+  color: var(--foreground);
+  border-color: var(--border);
+}
+
+html.light select option {
+  background: var(--card);
+  color: var(--foreground);
+}
+
+/* Light mode text adjustments */
+html.light .text-white {
+  color: var(--foreground);
+}
+
+html.light .text-white\/40,
+html.light .text-white\/30,
+html.light .text-white\/20 {
+  color: var(--muted-foreground);
 }

@@ -1,25 +1,60 @@
 import { Router, Response } from 'express';
 import { requireAuth, AuthenticatedRequest } from '../middleware/auth';
 import * as db from '../db/queries';
+import { query } from '../db/index';
 import crypto from 'crypto';
+import { v4 as uuidv4 } from 'uuid';
 
 export const deployRouter = Router();
 deployRouter.use(requireAuth as any);
 
-// In-memory store for deployments
-interface DeploymentRecord {
-  id: string;
-  project_id: string;
-  user_id: string;
-  provider: string;
-  url: string | null;
-  status: string;
-  config: Record<string, any>;
-  logs: string | null;
-  created_at: string;
-  completed_at: string | null;
+// ── SQLite-backed deployment helpers ─────────────────────────────────────────
+async function saveDeployment(deployment: {
+  id: string; project_id: string; user_id: string; provider: string;
+  url: string | null; status: string; config: Record<string, any>;
+  logs: string | null; created_at: string; completed_at: string | null;
+}) {
+  await query(
+    `INSERT INTO deployments (id, project_id, user_id, provider, url, status, config, logs, created_at, completed_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [deployment.id, deployment.project_id, deployment.user_id, deployment.provider,
+     deployment.url, deployment.status, JSON.stringify(deployment.config),
+     deployment.logs, deployment.created_at, deployment.completed_at]
+  );
 }
-const deploymentsStore = new Map<string, DeploymentRecord>();
+
+async function updateDeployment(id: string, updates: { url?: string | null; status?: string; logs?: string | null; completed_at?: string | null }) {
+  const fields: string[] = [];
+  const values: any[] = [];
+  let idx = 2; // $1 is id
+  for (const [key, value] of Object.entries(updates)) {
+    if (value !== undefined) {
+      fields.push(`${key} = $${idx}`);
+      values.push(value);
+      idx++;
+    }
+  }
+  if (fields.length === 0) return;
+  await query(`UPDATE deployments SET ${fields.join(', ')} WHERE id = $1`, [id, ...values]);
+}
+
+async function getDeploymentById(id: string) {
+  const result = await query('SELECT * FROM deployments WHERE id = $1', [id]);
+  const row = result.rows[0];
+  if (row && typeof row.config === 'string') row.config = JSON.parse(row.config);
+  return row || null;
+}
+
+async function getDeploymentsByProject(projectId: string) {
+  const result = await query(
+    'SELECT * FROM deployments WHERE project_id = $1 ORDER BY created_at DESC',
+    [projectId]
+  );
+  return result.rows.map((row: any) => {
+    if (typeof row.config === 'string') row.config = JSON.parse(row.config);
+    return row;
+  });
+}
 
 // ── POST /api/deploy/vercel ──────────────────────────────────────────────────
 deployRouter.post('/vercel', async (req: AuthenticatedRequest, res: Response) => {
@@ -36,20 +71,20 @@ deployRouter.post('/vercel', async (req: AuthenticatedRequest, res: Response) =>
     const vercelToken = process.env.VERCEL_TOKEN;
     if (!vercelToken) return res.status(400).json({ error: 'Vercel token not configured' });
 
-    const deployId = crypto.randomUUID();
-    const deployment: DeploymentRecord = {
+    const deployId = uuidv4();
+    const deployment = {
       id: deployId,
       project_id: projectId,
       user_id: user.id,
       provider: 'vercel',
-      url: null,
+      url: null as string | null,
       status: 'pending',
       config: { name, envVars },
-      logs: null,
+      logs: null as string | null,
       created_at: new Date().toISOString(),
-      completed_at: null,
+      completed_at: null as string | null,
     };
-    deploymentsStore.set(deployId, deployment);
+    await saveDeployment(deployment);
 
     // Deploy to Vercel
     const vercelFiles = files.map((f) => ({
@@ -81,6 +116,8 @@ deployRouter.post('/vercel', async (req: AuthenticatedRequest, res: Response) =>
       deployment.completed_at = new Date().toISOString();
     }
 
+    await updateDeployment(deployId, { url: deployment.url, status: deployment.status, logs: deployment.logs, completed_at: deployment.completed_at });
+
     res.json({ deployment });
   } catch (err: any) {
     console.error('[Deploy] vercel error:', err.message);
@@ -103,20 +140,20 @@ deployRouter.post('/netlify', async (req: AuthenticatedRequest, res: Response) =
     const netlifyToken = process.env.NETLIFY_TOKEN;
     if (!netlifyToken) return res.status(400).json({ error: 'Netlify token not configured' });
 
-    const deployId = crypto.randomUUID();
-    const deployment: DeploymentRecord = {
+    const deployId = uuidv4();
+    const deployment = {
       id: deployId,
       project_id: projectId,
       user_id: user.id,
       provider: 'netlify',
-      url: null,
+      url: null as string | null,
       status: 'pending',
       config: { name, envVars },
-      logs: null,
+      logs: null as string | null,
       created_at: new Date().toISOString(),
-      completed_at: null,
+      completed_at: null as string | null,
     };
-    deploymentsStore.set(deployId, deployment);
+    await saveDeployment(deployment);
 
     // Create site
     const siteRes = await fetch('https://api.netlify.com/api/v1/sites', {
@@ -130,6 +167,7 @@ deployRouter.post('/netlify', async (req: AuthenticatedRequest, res: Response) =
       deployment.status = 'error';
       deployment.logs = siteData.error || 'Failed to create site';
       deployment.completed_at = new Date().toISOString();
+      await updateDeployment(deployId, { status: deployment.status, logs: deployment.logs, completed_at: deployment.completed_at });
       return res.json({ deployment });
     }
 
@@ -169,6 +207,8 @@ deployRouter.post('/netlify', async (req: AuthenticatedRequest, res: Response) =
     deployment.status = 'ready';
     deployment.completed_at = new Date().toISOString();
 
+    await updateDeployment(deployId, { url: deployment.url, status: deployment.status, completed_at: deployment.completed_at });
+
     res.json({ deployment });
   } catch (err: any) {
     console.error('[Deploy] netlify error:', err.message);
@@ -188,25 +228,20 @@ deployRouter.post('/cloudrun', async (req: AuthenticatedRequest, res: Response) 
     const user = await db.getUserByClerkId(req.clerkId!);
     if (!user) return res.status(401).json({ error: 'User not found' });
 
-    const deployId = crypto.randomUUID();
-    const deployment: DeploymentRecord = {
+    const deployId = uuidv4();
+    const deployment = {
       id: deployId,
       project_id: projectId,
       user_id: user.id,
       provider: 'cloudrun',
-      url: null,
+      url: null as string | null,
       status: 'pending',
       config: { name, envVars, dockerfile: generateDockerfile(files) },
-      logs: 'Cloud Run deployment requires gcloud CLI. Dockerfile generated.',
+      logs: 'Deployment queued. Cloud Run requires GCP service account configuration.',
       created_at: new Date().toISOString(),
-      completed_at: null,
+      completed_at: null as string | null,
     };
-    deploymentsStore.set(deployId, deployment);
-
-    // Cloud Run deployments require gcloud CLI setup
-    // For now, mark as pending with instructions
-    deployment.status = 'pending';
-    deployment.logs = 'Deployment queued. Cloud Run requires GCP service account configuration.';
+    await saveDeployment(deployment);
 
     res.json({ deployment });
   } catch (err: any) {
@@ -219,7 +254,7 @@ deployRouter.post('/cloudrun', async (req: AuthenticatedRequest, res: Response) 
 deployRouter.get('/status/:deployId', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const deployId = req.params.deployId as string;
-    const deployment = deploymentsStore.get(deployId);
+    const deployment = await getDeploymentById(deployId);
     if (!deployment) return res.status(404).json({ error: 'Deployment not found' });
 
     res.json({ deployment });
@@ -232,10 +267,8 @@ deployRouter.get('/status/:deployId', async (req: AuthenticatedRequest, res: Res
 // ── GET /api/deploy/history/:projectId ───────────────────────────────────────
 deployRouter.get('/history/:projectId', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const projectId = req.params.projectId;
-    const deployments = Array.from(deploymentsStore.values())
-      .filter((d) => d.project_id === projectId)
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    const projectId = req.params.projectId as string;
+    const deployments = await getDeploymentsByProject(projectId);
 
     res.json({ deployments });
   } catch (err: any) {

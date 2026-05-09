@@ -1,14 +1,20 @@
 import { query } from './index';
+import { v4 as uuidv4 } from 'uuid';
 
 // --- Users ---
 export async function findOrCreateUser(clerkId: string, email: string, displayName?: string) {
   const existing = await query('SELECT * FROM users WHERE clerk_id = $1', [clerkId]);
   if (existing.rows.length > 0) return existing.rows[0];
 
-  const result = await query(
-    'INSERT INTO users (clerk_id, email, display_name) VALUES ($1, $2, $3) RETURNING *',
-    [clerkId, email, displayName || email.split('@')[0]]
+  const id = uuidv4();
+  const name = displayName || email.split('@')[0];
+  const now = new Date().toISOString();
+  await query(
+    'INSERT INTO users (id, clerk_id, email, display_name, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)',
+    [id, clerkId, email, name, now, now]
   );
+
+  const result = await query('SELECT * FROM users WHERE id = $1', [id]);
   return result.rows[0];
 }
 
@@ -19,10 +25,13 @@ export async function getUserByClerkId(clerkId: string) {
 
 // --- Projects ---
 export async function createProject(userId: string, name: string, description?: string) {
-  const result = await query(
-    'INSERT INTO projects (user_id, name, description) VALUES ($1, $2, $3) RETURNING *',
-    [userId, name, description]
+  const id = uuidv4();
+  const now = new Date().toISOString();
+  await query(
+    'INSERT INTO projects (id, user_id, name, description, status, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+    [id, userId, name, description || '', 'active', now, now]
   );
+  const result = await query('SELECT * FROM projects WHERE id = $1', [id]);
   return result.rows[0];
 }
 
@@ -44,10 +53,11 @@ export async function updateProject(projectId: string, updates: Record<string, a
   const values = Object.values(updates);
   const setClause = keys.map((k, i) => `${k} = $${i + 2}`).join(', ');
 
-  const result = await query(
-    `UPDATE projects SET ${setClause} WHERE id = $1 RETURNING *`,
-    [projectId, ...values]
+  await query(
+    `UPDATE projects SET ${setClause}, updated_at = $${keys.length + 2} WHERE id = $1`,
+    [projectId, ...values, new Date().toISOString()]
   );
+  const result = await query('SELECT * FROM projects WHERE id = $1', [projectId]);
   return result.rows[0];
 }
 
@@ -57,10 +67,13 @@ export async function deleteProject(projectId: string) {
 
 // --- Chat Sessions ---
 export async function createChatSession(projectId: string, userId: string) {
-  const result = await query(
-    'INSERT INTO chat_sessions (project_id, user_id) VALUES ($1, $2) RETURNING *',
-    [projectId, userId]
+  const id = uuidv4();
+  const now = new Date().toISOString();
+  await query(
+    'INSERT INTO chat_sessions (id, project_id, user_id, title, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)',
+    [id, projectId, userId, 'New Chat', now, now]
   );
+  const result = await query('SELECT * FROM chat_sessions WHERE id = $1', [id]);
   return result.rows[0];
 }
 
@@ -74,10 +87,13 @@ export async function getChatSession(projectId: string) {
 
 // --- Chat Messages ---
 export async function addMessage(sessionId: string, role: string, content: string, modelUsed?: string, tokensUsed?: number) {
-  const result = await query(
-    'INSERT INTO chat_messages (session_id, role, content, model_used, tokens_used) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-    [sessionId, role, content, modelUsed, tokensUsed || 0]
+  const id = uuidv4();
+  const now = new Date().toISOString();
+  await query(
+    'INSERT INTO chat_messages (id, session_id, role, content, model_used, tokens_used, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+    [id, sessionId, role, content, modelUsed || null, tokensUsed || 0, now]
   );
+  const result = await query('SELECT * FROM chat_messages WHERE id = $1', [id]);
   return result.rows[0];
 }
 
@@ -92,7 +108,7 @@ export async function getMessages(sessionId: string, limit = 50) {
 // --- MCP Connections ---
 export async function getMCPConnections(userId: string) {
   const result = await query(
-    'SELECT id, name, url, transport, is_active, created_at FROM mcp_connections WHERE user_id = $1 AND is_active = true ORDER BY created_at DESC',
+    'SELECT id, name, url, transport, is_active, created_at FROM mcp_connections WHERE user_id = $1 AND is_active = 1 ORDER BY created_at DESC',
     [userId],
   );
   return result.rows;
@@ -107,12 +123,14 @@ export async function createMCPConnection(
   userId: string,
   data: { name: string; url: string; transport: string; authConfig: Record<string, any> },
 ) {
-  const result = await query(
-    `INSERT INTO mcp_connections (user_id, name, url, transport, auth_config)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, name, url, transport, is_active, created_at`,
-    [userId, data.name, data.url, data.transport, JSON.stringify(data.authConfig)],
+  const id = uuidv4();
+  const now = new Date().toISOString();
+  await query(
+    `INSERT INTO mcp_connections (id, user_id, name, url, transport, auth_config, is_active, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $8)`,
+    [id, userId, data.name, data.url, data.transport, JSON.stringify(data.authConfig), now, now],
   );
+  const result = await query('SELECT id, name, url, transport, is_active, created_at FROM mcp_connections WHERE id = $1', [id]);
   return result.rows[0];
 }
 
@@ -136,27 +154,52 @@ export async function upsertOAuthToken(
     rawResponse?: Record<string, any>;
   },
 ) {
+  const now = new Date().toISOString();
+  const existing = await query(
+    'SELECT * FROM oauth_tokens WHERE user_id = $1 AND provider = $2',
+    [userId, provider]
+  );
+
+  if (existing.rows.length > 0) {
+    await query(
+      `UPDATE oauth_tokens SET
+        access_token = $3,
+        refresh_token = COALESCE($4, refresh_token),
+        expires_at = $5,
+        scopes = $6,
+        raw_response = $7,
+        updated_at = $8
+       WHERE user_id = $1 AND provider = $2`,
+      [
+        userId, provider,
+        data.accessToken,
+        data.refreshToken ?? null,
+        data.expiresAt?.toISOString() ?? null,
+        JSON.stringify(data.scopes ?? []),
+        JSON.stringify(data.rawResponse ?? {}),
+        now,
+      ],
+    );
+  } else {
+    const id = uuidv4();
+    await query(
+      `INSERT INTO oauth_tokens (id, user_id, provider, access_token, refresh_token, expires_at, scopes, raw_response, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        id, userId, provider,
+        data.accessToken,
+        data.refreshToken ?? null,
+        data.expiresAt?.toISOString() ?? null,
+        JSON.stringify(data.scopes ?? []),
+        JSON.stringify(data.rawResponse ?? {}),
+        now, now,
+      ],
+    );
+  }
+
   const result = await query(
-    `INSERT INTO oauth_tokens
-       (user_id, provider, access_token, refresh_token, expires_at, scopes, raw_response, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-     ON CONFLICT (user_id, provider) DO UPDATE SET
-       access_token  = EXCLUDED.access_token,
-       refresh_token = COALESCE(EXCLUDED.refresh_token, oauth_tokens.refresh_token),
-       expires_at    = EXCLUDED.expires_at,
-       scopes        = EXCLUDED.scopes,
-       raw_response  = EXCLUDED.raw_response,
-       updated_at    = NOW()
-     RETURNING *`,
-    [
-      userId,
-      provider,
-      data.accessToken,
-      data.refreshToken ?? null,
-      data.expiresAt ?? null,
-      data.scopes ?? [],
-      JSON.stringify(data.rawResponse ?? {}),
-    ],
+    'SELECT * FROM oauth_tokens WHERE user_id = $1 AND provider = $2',
+    [userId, provider]
   );
   return result.rows[0];
 }
@@ -192,17 +235,20 @@ export async function saveSessionSummary(
   summarizedUpTo: string,
   tokensInSummary: number,
 ) {
-  const result = await query(
-    `INSERT INTO session_summaries (session_id, summary_text, summarized_up_to, tokens_in_summary)
-     VALUES ($1, $2, $3, $4) RETURNING *`,
-    [sessionId, summaryText, summarizedUpTo, tokensInSummary],
+  const id = uuidv4();
+  const now = new Date().toISOString();
+  await query(
+    `INSERT INTO session_summaries (id, session_id, summary_text, summarized_up_to, tokens_in_summary, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [id, sessionId, summaryText, summarizedUpTo, tokensInSummary, now],
   );
+  const result = await query('SELECT * FROM session_summaries WHERE id = $1', [id]);
   return result.rows[0];
 }
 
 export async function getSessionTokenUsage(sessionId: string): Promise<number> {
   const result = await query(
-    `SELECT COALESCE(SUM(tokens_used), 0)::int AS total
+    `SELECT COALESCE(SUM(tokens_used), 0) AS total
      FROM chat_messages WHERE session_id = $1`,
     [sessionId],
   );
@@ -211,9 +257,11 @@ export async function getSessionTokenUsage(sessionId: string): Promise<number> {
 
 // --- Usage Stats ---
 export async function recordUsage(userId: string, model: string, tokensInput: number, tokensOutput: number, requestType: string) {
+  const id = uuidv4();
+  const now = new Date().toISOString();
   await query(
-    'INSERT INTO usage_stats (user_id, model, tokens_input, tokens_output, request_type) VALUES ($1, $2, $3, $4, $5)',
-    [userId, model, tokensInput, tokensOutput, requestType]
+    'INSERT INTO usage_stats (id, user_id, model, tokens_input, tokens_output, request_type, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+    [id, userId, model, tokensInput, tokensOutput, requestType, now]
   );
 }
 
@@ -227,11 +275,14 @@ export async function saveProjectFile(
   sizeBytes: number,
   blobUrl: string,
 ) {
-  const result = await query(
-    `INSERT INTO project_files (project_id, user_id, filename, mime_type, size_bytes, blob_url)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-    [projectId, userId, filename, mimeType, sizeBytes, blobUrl],
+  const id = uuidv4();
+  const now = new Date().toISOString();
+  await query(
+    `INSERT INTO project_files (id, project_id, user_id, filename, mime_type, size_bytes, blob_url, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [id, projectId, userId, filename, mimeType, sizeBytes, blobUrl, now],
   );
+  const result = await query('SELECT * FROM project_files WHERE id = $1', [id]);
   return result.rows[0];
 }
 
@@ -254,7 +305,7 @@ export async function deleteProjectFile(fileId: string) {
 
 export async function getUserStorageUsage(userId: string): Promise<number> {
   const result = await query(
-    `SELECT COALESCE(SUM(size_bytes), 0)::bigint AS total_bytes
+    `SELECT COALESCE(SUM(size_bytes), 0) AS total_bytes
      FROM project_files WHERE user_id = $1`,
     [userId],
   );

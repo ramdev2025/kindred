@@ -1,30 +1,16 @@
 import { Router, Response } from 'express';
 import { requireAuth, AuthenticatedRequest } from '../middleware/auth';
 import * as db from '../db/queries';
+import {
+  createDatabaseConnection,
+  getDatabaseConnections,
+  deleteDatabaseConnection,
+  getDatabaseConnectionById,
+} from '../db/sqlite';
 import crypto from 'crypto';
 
 export const databasesRouter = Router();
 databasesRouter.use(requireAuth as any);
-
-// In-memory store for database connections
-const dbConnections = new Map<string, Array<{
-  id: string;
-  user_id: string;
-  name: string;
-  provider: string;
-  host: string;
-  port: number;
-  database_name: string;
-  username: string;
-  encrypted_password: string;
-  ssl_enabled: boolean;
-  is_active: boolean;
-  created_at: string;
-}>>();
-
-function getUserConnections(userId: string) {
-  return dbConnections.get(userId) || [];
-}
 
 // Simple AES-256-CBC encryption
 const ALGORITHM = 'aes-256-cbc';
@@ -64,7 +50,7 @@ databasesRouter.post('/connect', async (req: AuthenticatedRequest, res: Response
     const user = await db.getUserByClerkId(req.clerkId!);
     if (!user) return res.status(401).json({ error: 'User not found' });
 
-    // Test connection
+    // Test connection based on provider
     if (provider === 'postgres' || provider === 'supabase') {
       try {
         const { Pool } = await import('pg');
@@ -95,26 +81,36 @@ databasesRouter.post('/connect', async (req: AuthenticatedRequest, res: Response
       } catch (connErr: any) {
         return res.status(400).json({ error: `Connection test failed: ${connErr.message}` });
       }
+    } else if (provider === 'sqlite') {
+      // For SQLite, verify the file path is accessible
+      try {
+        const BetterSqlite = (await import('better-sqlite3')).default;
+        const testDb = new BetterSqlite(database_name, { readonly: true, fileMustExist: true });
+        testDb.close();
+      } catch (connErr: any) {
+        // If file doesn't exist, that's okay — it'll be created on first use
+        if (connErr.code !== 'SQLITE_CANTOPEN') {
+          return res.status(400).json({ error: `SQLite connection test failed: ${connErr.message}` });
+        }
+      }
     }
 
-    // Save connection
+    // Save connection to SQLite (persisted)
     const encryptedPassword = encrypt(password);
-    const connId = crypto.randomUUID();
-    const connection = {
-      id: connId,
-      user_id: user.id,
-      name, provider, host, port, database_name, username,
-      encrypted_password: encryptedPassword,
-      ssl_enabled, is_active: true,
-      created_at: new Date().toISOString(),
-    };
-
-    const userConns = getUserConnections(user.id);
-    userConns.push(connection);
-    dbConnections.set(user.id, userConns);
+    const connection = createDatabaseConnection({
+      userId: user.id,
+      name,
+      provider,
+      host: provider === 'sqlite' ? 'local' : host,
+      port: provider === 'sqlite' ? 0 : port,
+      databaseName: database_name,
+      username: provider === 'sqlite' ? 'sqlite' : username,
+      encryptedPassword,
+      sslEnabled: ssl_enabled,
+    });
 
     // Return without password
-    const { encrypted_password, ...safeConn } = connection;
+    const { encrypted_password, ...safeConn } = connection as any;
     res.status(201).json({ connection: safeConn });
   } catch (err: any) {
     console.error('[Databases] connect error:', err.message);
@@ -128,9 +124,8 @@ databasesRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
     const user = await db.getUserByClerkId(req.clerkId!);
     if (!user) return res.status(401).json({ error: 'User not found' });
 
-    const conns = getUserConnections(user.id)
-      .filter((c) => c.is_active)
-      .map(({ encrypted_password, ...safe }) => safe);
+    const conns = getDatabaseConnections(user.id)
+      .map(({ encrypted_password, ...safe }: any) => safe);
 
     res.json({ connections: conns });
   } catch (err: any) {
@@ -145,10 +140,7 @@ databasesRouter.delete('/:id', async (req: AuthenticatedRequest, res: Response) 
     const user = await db.getUserByClerkId(req.clerkId!);
     if (!user) return res.status(401).json({ error: 'User not found' });
 
-    const conns = getUserConnections(user.id);
-    const filtered = conns.filter((c) => c.id !== req.params.id);
-    dbConnections.set(user.id, filtered);
-
+    deleteDatabaseConnection(req.params.id as string, user.id);
     res.json({ success: true });
   } catch (err: any) {
     console.error('[Databases] delete error:', err.message);
@@ -170,9 +162,8 @@ databasesRouter.post('/:id/query', async (req: AuthenticatedRequest, res: Respon
     const user = await db.getUserByClerkId(req.clerkId!);
     if (!user) return res.status(401).json({ error: 'User not found' });
 
-    const conns = getUserConnections(user.id);
-    const conn = conns.find((c) => c.id === req.params.id);
-    if (!conn) return res.status(404).json({ error: 'Connection not found' });
+    const conn = getDatabaseConnectionById(req.params.id as string) as any;
+    if (!conn || conn.user_id !== user.id) return res.status(404).json({ error: 'Connection not found' });
 
     const password = decrypt(conn.encrypted_password);
 
@@ -189,6 +180,16 @@ databasesRouter.post('/:id/query', async (req: AuthenticatedRequest, res: Respon
       await pool.end();
 
       res.json({ rows: result.rows, fields: result.fields.map((f) => f.name) });
+    } else if (conn.provider === 'sqlite') {
+      // Query the user's SQLite database file
+      const BetterSqlite = (await import('better-sqlite3')).default;
+      const userDb = new BetterSqlite(conn.database_name, { readonly: true });
+      const stmt = userDb.prepare(sql);
+      const rows = stmt.all();
+      const columns = stmt.columns().map((c: any) => c.name);
+      userDb.close();
+
+      res.json({ rows, fields: columns });
     } else {
       return res.status(400).json({ error: `Query execution not supported for ${conn.provider}` });
     }
@@ -204,9 +205,8 @@ databasesRouter.get('/:id/schema', async (req: AuthenticatedRequest, res: Respon
     const user = await db.getUserByClerkId(req.clerkId!);
     if (!user) return res.status(401).json({ error: 'User not found' });
 
-    const conns = getUserConnections(user.id);
-    const conn = conns.find((c) => c.id === req.params.id);
-    if (!conn) return res.status(404).json({ error: 'Connection not found' });
+    const conn = getDatabaseConnectionById(req.params.id as string) as any;
+    if (!conn || conn.user_id !== user.id) return res.status(404).json({ error: 'Connection not found' });
 
     const password = decrypt(conn.encrypted_password);
 
@@ -233,6 +233,30 @@ databasesRouter.get('/:id/schema', async (req: AuthenticatedRequest, res: Respon
       }
 
       await pool.end();
+      res.json({ tables });
+    } else if (conn.provider === 'sqlite') {
+      // Introspect SQLite schema
+      const BetterSqlite = (await import('better-sqlite3')).default;
+      const userDb = new BetterSqlite(conn.database_name, { readonly: true });
+
+      const tableRows = userDb.prepare(
+        "SELECT name AS table_name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+      ).all() as any[];
+
+      const tables = [];
+      for (const row of tableRows) {
+        const colRows = userDb.prepare(`PRAGMA table_info('${row.table_name}')`).all() as any[];
+        tables.push({
+          table_name: row.table_name,
+          columns: colRows.map((c: any) => ({
+            column_name: c.name,
+            data_type: c.type || 'TEXT',
+            is_nullable: c.notnull ? 'NO' : 'YES',
+          })),
+        });
+      }
+
+      userDb.close();
       res.json({ tables });
     } else {
       return res.status(400).json({ error: `Schema introspection not supported for ${conn.provider}` });

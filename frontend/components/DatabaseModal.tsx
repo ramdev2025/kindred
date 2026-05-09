@@ -180,10 +180,11 @@ export default function DatabaseModal({ open, onClose }: DatabaseModalProps) {
                   </div>
                   <div>
                     <label className="text-xs font-medium text-[var(--muted-foreground)] mb-1.5 block">Provider</label>
-                    <select value={provider} onChange={(e) => setProvider(e.target.value)} className="w-full px-4 py-2.5 bg-[var(--muted)] border border-[var(--border)] rounded-lg text-sm text-white focus:outline-none focus:border-purple-500 transition">
+                    <select value={provider} onChange={(e) => { setProvider(e.target.value); if (e.target.value === 'sqlite') { setHost('local'); setPort('0'); setUsername('sqlite'); } }} className="w-full px-4 py-2.5 bg-[var(--muted)] border border-[var(--border)] rounded-lg text-sm text-white focus:outline-none focus:border-purple-500 transition">
                       <option value="postgres">PostgreSQL</option>
                       <option value="mysql">MySQL</option>
                       <option value="supabase">Supabase</option>
+                      <option value="sqlite">SQLite</option>
                     </select>
                   </div>
                   <div className="grid grid-cols-3 gap-3">

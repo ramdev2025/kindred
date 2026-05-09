@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { requireAuth, AuthenticatedRequest } from '../middleware/auth';
 import * as e2b from '../services/e2b';
 import * as db from '../db/queries';
+import { incrementSandboxUsage, getUserByClerkIdSQLite } from '../db/sqlite';
 
 export const sandboxRouter = Router();
 
@@ -25,6 +26,12 @@ sandboxRouter.post('/create', async (req: AuthenticatedRequest, res: Response) =
       e2b_sandbox_id: result.sandboxId,
       preview_url: result.url,
     });
+
+    // Track sandbox usage against quota
+    try {
+      const user = getUserByClerkIdSQLite(req.clerkId!) as any;
+      if (user) incrementSandboxUsage(user.id);
+    } catch {}
 
     res.json({ sandboxId: result.sandboxId, url: result.url });
   } catch (error: any) {

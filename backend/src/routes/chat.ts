@@ -6,6 +6,7 @@ import { buildContext, summarizeSessionHistory, ContextStats } from '../services
 import { findOrCreateUser } from '../db/queries';
 import * as db from '../db/queries';
 import { getStoredFileAsync } from './upload';
+import { recordTokenUsage } from '../db/sqlite';
 
 export const chatRouter = Router();
 chatRouter.use(requireAuth as any);
@@ -70,6 +71,7 @@ chatRouter.post('/send', async (req: AuthenticatedRequest, res: Response) => {
       await db.addMessage(session.id, 'assistant', response.content, response.model, response.tokensUsed);
     }
     await db.recordUsage(user.id, response.model, response.tokensUsed, 0, 'chat');
+    try { recordTokenUsage(user.id, response.tokensUsed); } catch {} // update quota counter
 
     res.json({
       content: response.content,
@@ -137,6 +139,7 @@ chatRouter.post('/stream', async (req: AuthenticatedRequest, res: Response) => {
     }
     if (user && modelUsed) {
       await db.recordUsage(user.id, modelUsed, tokensUsed, 0, 'chat');
+      try { recordTokenUsage(user.id, tokensUsed); } catch {} // update quota counter
     }
 
     res.write('data: ' + JSON.stringify({
@@ -239,6 +242,7 @@ chatRouter.post('/agentic', async (req: AuthenticatedRequest, res: Response) => 
     }
     if (user && modelUsed) {
       await db.recordUsage(user.id, modelUsed, tokensUsed, 0, 'chat');
+      try { recordTokenUsage(user.id, tokensUsed); } catch {} // update quota counter
     }
 
     // Include contextStats so the frontend meter updates after AI responds

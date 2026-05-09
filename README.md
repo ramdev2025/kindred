@@ -11,8 +11,8 @@ A full-stack webapp that lets users build applications via natural-language vibe
 | Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS, Clerk Auth, Monaco Editor |
 | Backend | Node.js, Express, TypeScript, Google Generative AI, OpenAI, E2B SDK, BullMQ |
 | Worker | Python 3.13, FastAPI, OpenAI (Hermes mock) |
-| Database | PostgreSQL 16 |
-| Cache/Queue | Redis 7 + BullMQ |
+| Database | PostgreSQL 16 (user auth, MCP metadata) |
+| Cache/Queue | SQLite (WAL mode) |
 | Sandboxes | E2B Code Interpreter |
 
 ## Prerequisites
@@ -31,10 +31,10 @@ cp .env.example .env
 # Edit .env and fill in your API keys
 ```
 
-### 2. Start Infrastructure (PostgreSQL + Redis)
+### 2. Start Infrastructure (PostgreSQL)
 
 ```bash
-docker compose up postgres redis -d
+docker compose up postgres -d
 ```
 
 ### 3. Start Backend
@@ -62,22 +62,31 @@ pip install -r requirements.txt
 python main.py
 ```
 
-### Full Docker Setup
+### Production VM Deployment
+
+For a production deployment inside a Virtual Machine, a helper script is provided which will install Docker, generate security keys, and start the full stack behind an Nginx reverse proxy.
 
 ```bash
-docker compose up --build
+chmod +x deploy.sh
+./deploy.sh
 ```
 
 ## Architecture
 
 ```
-Frontend (localhost:3000)  -->  Backend (localhost:3001)  -->  Hermes Worker (localhost:8000)
-     |                              |                              |
-     |                              |                              |
-  Clerk Auth                   PostgreSQL + Redis              OpenAI API
-     |                              |
-     |                              |
-  Monaco Editor             E2B Sandbox (cloud)
+            [ Public Internet ]
+                   |
+            Nginx (Port 80)
+             /           \
+     ( / )  /             \ ( /api/* )
+           v               v
+Frontend (internal)  -->  Backend (internal)  -->  Hermes Worker (internal)
+     |                        |                           |
+  Clerk Auth                  |                        OpenAI API
+                              |
+                     PostgreSQL & SQLite
+                              |
+                     E2B Sandbox (cloud)
 ```
 
 ## API Endpoints
