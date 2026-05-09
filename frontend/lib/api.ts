@@ -1,6 +1,9 @@
 import axios from 'axios';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+let API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+if (process.env.NODE_ENV === 'production' && API_BASE.includes('localhost')) {
+  API_BASE = '';
+}
 
 // Context stats returned by the backend after each AI response
 export interface ContextStats {
