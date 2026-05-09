@@ -108,7 +108,7 @@ async function generatePayPalAccessToken() {
       Authorization: `Basic ${auth}`,
     },
   });
-  const data = await response.json();
+  const data = await response.json() as any;
   if (!response.ok) throw new Error(data.error_description || 'Failed to generate PayPal token');
   return data.access_token;
 }
@@ -138,7 +138,7 @@ billingRouter.post('/paypal/create-order', async (req: AuthenticatedRequest, res
       }),
     });
 
-    const data = await response.json();
+    const data = await response.json() as any;
     if (!response.ok) throw new Error(data.message || 'Failed to create PayPal order');
 
     res.json({ id: data.id });
@@ -163,7 +163,7 @@ billingRouter.post('/paypal/capture-order', async (req: AuthenticatedRequest, re
       },
     });
 
-    const data = await response.json();
+    const data = await response.json() as any;
     if (!response.ok) throw new Error(data.message || 'Failed to capture PayPal order');
 
     // Order successfully captured. Determine which tier was purchased.
