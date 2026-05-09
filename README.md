@@ -4,6 +4,21 @@
 
 A full-stack webapp that lets users build applications via natural-language vibe coding. Uses intelligent AI model routing between Gemini 2.5 Pro, GPT-5.4, and a Hermes reasoning agent. Code executes in secure E2B cloud sandboxes with live previews.
 
+## 🚀 What's New (v2.0)
+
+- **Zero-Dependency Architecture:** Completely migrated from Redis to an integrated SQLite architecture (WAL mode) for caching, rate limiting, and job queuing.
+- **Monetization & Quotas:** Usage-based billing with tiered limits (Free/Pro/Team) enforced across token usage and sandbox deployments.
+- **PayPal Integration:** Fully integrated end-to-end PayPal checkout for upgrading user pricing tiers instantly.
+- **Template Marketplace:** A beautiful new Template Picker UI allowing users to jump-start projects via built-in framework scaffolds (React SPA, Express API, etc.).
+- **Production VM Deployment:** Simplified one-click VM deployment with a new `deploy.sh` script, securing the stack behind an Nginx reverse proxy.
+
+## ✨ Core Features
+
+- **Multi-Model Intelligence:** Intelligent automatic routing between Gemini 2.5 Pro (speed), GPT-5.4 (complex generation), and a Hermes agent (deep reasoning).
+- **Live Cloud Sandboxes:** Instant code execution and live previews via E2B Code Interpreter.
+- **Modern Interface:** Highly polished Next.js React frontend featuring fluid animations, Monaco editor, and a dynamic usage dashboard.
+- **Secure Authentication:** Built-in Clerk Auth for seamless sign-in and session management.
+
 ## Tech Stack
 
 | Component | Technology |
@@ -135,8 +150,7 @@ See `.env.example` for all required configuration. Key variables:
 - `OPENAI_API_KEY` — OpenAI API access
 - `E2B_API_KEY` — E2B sandbox provisioning
 - `DATABASE_URL` — PostgreSQL connection string
-- `REDIS_URL` — Redis connection string
-
+- `PAYPAL_CLIENT_ID` — PayPal integration
 ## Development
 
 ```bash

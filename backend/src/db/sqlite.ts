@@ -412,6 +412,25 @@ export function getOrCreateQuota(userId: string): QuotaInfo {
   return quota as QuotaInfo;
 }
 
+export function upgradeUserTier(userId: string, tierId: keyof typeof TIER_LIMITS): void {
+  const sqlite = getSQLite();
+  const limits = TIER_LIMITS[tierId];
+  if (!limits) throw new Error('Invalid tier');
+  
+  // Ensure quota exists first
+  getOrCreateQuota(userId);
+  
+  sqlite.prepare(`
+    UPDATE user_quotas 
+    SET tier = ?, 
+        monthly_token_limit = ?, 
+        daily_sandbox_limit = ?, 
+        max_projects = ?,
+        updated_at = ?
+    WHERE user_id = ?
+  `).run(tierId, limits.tokens, limits.sandboxes, limits.projects, new Date().toISOString(), userId);
+}
+
 export function checkTokenQuota(userId: string, estimatedTokens: number = 0): { allowed: boolean; remaining: number; limit: number; used: number } {
   const quota = getOrCreateQuota(userId);
   if (quota.monthly_token_limit === -1) return { allowed: true, remaining: -1, limit: -1, used: quota.monthly_tokens_used }; // unlimited

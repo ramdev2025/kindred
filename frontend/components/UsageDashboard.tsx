@@ -2,7 +2,9 @@
 
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '@clerk/nextjs';
-import { fetchUsage, fetchPricingTiers, UsageSummary, PricingTier } from '@/lib/api';
+import { fetchUsage, fetchPricingTiers, UsageSummary, PricingTier, createPayPalOrder, capturePayPalOrder } from '@/lib/api';
+import { PayPalScriptProvider, PayPalButtons } from '@paypal/react-paypal-js';
+import { toast } from 'react-hot-toast';
 
 function ProgressBar({ value, max, color }: { value: number; max: number; color: string }) {
   const pct = max === -1 ? 0 : Math.min((value / max) * 100, 100);
@@ -62,7 +64,9 @@ function UsageCard({ title, used, limit, icon, color }: {
   );
 }
 
-function PricingCard({ tier, isCurrentTier }: { tier: PricingTier; isCurrentTier: boolean }) {
+function PricingCard({ tier, isCurrentTier, onUpgrade }: { tier: PricingTier; isCurrentTier: boolean; onUpgrade: () => void }) {
+  const { getToken } = useAuth();
+  
   return (
     <div style={{
       background: isCurrentTier ? 'var(--surface-2)' : 'var(--surface-1)',
@@ -89,7 +93,7 @@ function PricingCard({ tier, isCurrentTier }: { tier: PricingTier; isCurrentTier
         {tier.price === -1 ? 'Custom' : tier.price === 0 ? 'Free' : `$${tier.price}`}
         {tier.price > 0 && <span style={{ fontSize: 14, fontWeight: 400, color: 'var(--text-secondary)' }}>/mo</span>}
       </div>
-      <ul style={{ listStyle: 'none', padding: 0, margin: 0, fontSize: 13, lineHeight: 2 }}>
+      <ul style={{ listStyle: 'none', padding: 0, margin: 0, fontSize: 13, lineHeight: 2, marginBottom: 16 }}>
         <li style={{ color: 'var(--text-secondary)' }}>
           🎯 {tier.tokens === -1 ? 'Unlimited' : `${(tier.tokens / 1000).toFixed(0)}K`} tokens/month
         </li>
@@ -104,18 +108,37 @@ function PricingCard({ tier, isCurrentTier }: { tier: PricingTier; isCurrentTier
         ))}
       </ul>
       {!isCurrentTier && tier.price > 0 && (
-        <button
-          style={{
-            marginTop: 16, width: '100%', padding: '10px 0', borderRadius: 10,
-            background: 'var(--accent)', color: 'white', border: 'none',
-            fontWeight: 600, fontSize: 14, cursor: 'pointer',
-            transition: 'opacity 0.2s',
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.85')}
-          onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
-        >
-          Upgrade to {tier.name}
-        </button>
+        <div style={{ minHeight: 45 }}>
+          {process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID ? (
+             <PayPalButtons
+               style={{ layout: "horizontal", color: "blue", height: 40, tagline: false }}
+               createOrder={async () => {
+                 const token = await getToken();
+                 return createPayPalOrder(token!, tier.id);
+               }}
+               onApprove={async (data) => {
+                 try {
+                   const token = await getToken();
+                   await capturePayPalOrder(token!, data.orderID);
+                   toast.success(`Successfully upgraded to ${tier.name}!`);
+                   onUpgrade();
+                 } catch (err: any) {
+                   toast.error('Payment failed: ' + err.message);
+                 }
+               }}
+             />
+          ) : (
+             <button
+               style={{
+                 width: '100%', padding: '10px 0', borderRadius: 10,
+                 background: 'var(--surface-3)', color: 'var(--text-secondary)', border: 'none',
+                 fontWeight: 600, fontSize: 14, cursor: 'not-allowed',
+               }}
+             >
+               PayPal Not Configured
+             </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -127,25 +150,26 @@ export default function UsageDashboard() {
   const [tiers, setTiers] = useState<PricingTier[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const token = await getToken();
-        if (!token) return;
+  const loadData = async () => {
+    try {
+      const token = await getToken();
+      if (!token) return;
 
-        const [usageData, tiersData] = await Promise.all([
-          fetchUsage(token),
-          fetchPricingTiers(),
-        ]);
-        setUsage(usageData);
-        setTiers(tiersData);
-      } catch (err) {
-        console.error('[UsageDashboard] Failed to load:', err);
-      } finally {
-        setLoading(false);
-      }
+      const [usageData, tiersData] = await Promise.all([
+        fetchUsage(token),
+        fetchPricingTiers(),
+      ]);
+      setUsage(usageData);
+      setTiers(tiersData);
+    } catch (err) {
+      console.error('[UsageDashboard] Failed to load:', err);
+    } finally {
+      setLoading(false);
     }
-    load();
+  };
+
+  useEffect(() => {
+    loadData();
   }, []);
 
   if (loading) {
@@ -221,11 +245,13 @@ export default function UsageDashboard() {
 
       {/* Pricing Tiers */}
       <h3 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 16 }}>Plans</h3>
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-        {tiers.map((tier) => (
-          <PricingCard key={tier.id} tier={tier} isCurrentTier={tier.id === usage.tier} />
-        ))}
-      </div>
+      <PayPalScriptProvider options={{ clientId: process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID || 'test', currency: 'USD', intent: 'capture' }}>
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+          {tiers.map((tier) => (
+            <PricingCard key={tier.id} tier={tier} isCurrentTier={tier.id === usage.tier} onUpgrade={loadData} />
+          ))}
+        </div>
+      </PayPalScriptProvider>
     </div>
   );
 }

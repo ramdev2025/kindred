@@ -432,3 +432,19 @@ export async function useTemplate(token: string, templateId: string, projectName
   });
   return res.data as { project: any; initialPrompt: string; template: { id: string; name: string; category: string } };
 }
+
+// --- PayPal API (Phase 6.1) ---
+
+export async function createPayPalOrder(token: string, tierId: string): Promise<string> {
+  const res = await api.post('/api/billing/paypal/create-order', { tierId }, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data.id;
+}
+
+export async function capturePayPalOrder(token: string, orderID: string): Promise<{ success: boolean; tier: string }> {
+  const res = await api.post('/api/billing/paypal/capture-order', { orderID }, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data;
+}
