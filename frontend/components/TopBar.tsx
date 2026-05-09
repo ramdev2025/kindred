@@ -4,7 +4,6 @@ import { usePathname } from "next/navigation";
 import { useState, useEffect } from "react";
 import { useAuth } from "@clerk/nextjs";
 import ConnectionsModal from "./ConnectionsModal";
-import { ThemeToggle } from "./ThemeProvider";
 import { ShortcutHint } from "./KeyboardShortcuts";
 import { Tooltip } from "./ui";
 import { fetchConnections } from "../lib/mcp";
@@ -63,10 +62,6 @@ export default function TopBar({ sandboxActive, currentModel }: TopBarProps) {
             </span>
           )}
 
-          {/* Theme Toggle (Phase 4.4) */}
-          <Tooltip text="Toggle theme" shortcut="Ctrl+T">
-            <ThemeToggle />
-          </Tooltip>
 
           {/* Command Palette hint */}
           <Tooltip text="Command Palette" shortcut="Ctrl+K">

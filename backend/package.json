@@ -10,8 +10,10 @@
     "db:init": "psql $DATABASE_URL -f src/db/schema.sql"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.95.1",
     "@clerk/backend": "^1.20.0",
     "@e2b/code-interpreter": "^1.0.0",
+    "@google/genai": "^2.0.1",
     "@google/generative-ai": "^0.21.0",
     "@types/multer": "^2.1.0",
     "@vercel/blob": "^2.3.3",

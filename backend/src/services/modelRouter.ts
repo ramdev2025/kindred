@@ -1,15 +1,62 @@
-import { GoogleGenerativeAI, Part } from '@google/generative-ai';
 import OpenAI from 'openai';
+import { AnthropicVertex } from '@anthropic-ai/sdk';
+import { GoogleGenAI } from '@google/genai';
 import { getCached, setCache, buildCacheKey } from './cache';
-import { searchWithGemini, needsSearch } from './googleSearch';
 import { createHash } from 'crypto';
 
-// Initialize AI clients
-const gemini = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || '');
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+// ---------------------------------------------------------------------------
+// Lazy AI client initialisation (after dotenv.config() has run)
+// ---------------------------------------------------------------------------
+let _openai: OpenAI | null = null;
+let _anthropic: AnthropicVertex | null = null;
+let _gemini: GoogleGenAI | null = null;
 
+function getOpenAI(): OpenAI {
+  if (!_openai) {
+    const apiKey = process.env.OPENAI_API_KEY || '';
+    if (!apiKey) console.warn('[OpenAI] OPENAI_API_KEY is not set!');
+    _openai = new OpenAI({ apiKey });
+  }
+  return _openai;
+}
+
+function getAnthropic(): AnthropicVertex {
+  if (!_anthropic) {
+    const project = process.env.GOOGLE_CLOUD_PROJECT;
+    const region = process.env.GOOGLE_CLOUD_LOCATION || 'global';
+    if (!project) console.warn('[Claude/Vertex] GOOGLE_CLOUD_PROJECT is not set!');
+    // AnthropicVertex uses ADC — no API key required
+    _anthropic = new AnthropicVertex({ projectId: project, region });
+    console.log(`[Claude] Using Vertex AI backend (project: ${project}, region: ${region})`);
+  }
+  return _anthropic;
+}
+
+function getGemini(): GoogleGenAI {
+  if (!_gemini) {
+    const useVertex = (process.env.GOOGLE_GENAI_USE_VERTEXAI || '').toUpperCase() === 'TRUE';
+    if (useVertex) {
+      _gemini = new GoogleGenAI({
+        vertexai: true,
+        project: process.env.GOOGLE_CLOUD_PROJECT,
+        location: process.env.GOOGLE_CLOUD_LOCATION || 'us-central1',
+      } as any);
+      console.log('[Gemini] Using Vertex AI backend');
+    } else {
+      const apiKey = process.env.GOOGLE_GEMINI_API_KEY || '';
+      if (!apiKey) console.warn('[Gemini] GOOGLE_GEMINI_API_KEY is not set!');
+      _gemini = new GoogleGenAI({ apiKey });
+      console.log('[Gemini] Using AI Studio backend');
+    }
+  }
+  return _gemini;
+}
+
+// ---------------------------------------------------------------------------
+// Interfaces
+// ---------------------------------------------------------------------------
 export interface RoutingDecision {
-  model: 'gemini-2.5-pro' | 'gpt-5.4' | 'hermes';
+  model: 'gemini' | 'gpt-4o' | 'claude-sonnet';
   reasoning: string;
   confidence: number;
 }
@@ -32,65 +79,13 @@ export interface ChatResponse {
   content: string;
   model: string;
   tokensUsed: number;
-  usedSearch?: boolean;
-  searchSources?: Array<{ title: string; url: string }>;
 }
 
-/**
- * Route request to the best model based on task analysis
- */
-export function routeRequest(message: string, preferredModel?: string, hasAttachments?: boolean): RoutingDecision {
-  if (preferredModel && preferredModel !== 'auto') {
-    return {
-      model: preferredModel as RoutingDecision['model'],
-      reasoning: 'User preference',
-      confidence: 1.0,
-    };
-  }
-
-  // If there are image/PDF attachments, prefer Gemini (best multimodal)
-  if (hasAttachments) {
-    return { model: 'gemini-2.5-pro', reasoning: 'Multimodal input - using Gemini for vision/document understanding', confidence: 0.9 };
-  }
-
-  const lower = message.toLowerCase();
-
-  // Search tasks → Gemini (has Google Search tool)
-  if (needsSearch(lower)) {
-    return { model: 'gemini-2.5-pro', reasoning: 'Search task - using Gemini with Google Search', confidence: 0.85 };
-  }
-
-  // Deep reasoning indicators -> Hermes
-  const deepReasoningKeywords = ['analyze', 'compare', 'trade-off', 'architect', 'design pattern', 'debug complex', 'explain why'];
-  if (deepReasoningKeywords.some(k => lower.includes(k))) {
-    return { model: 'hermes', reasoning: 'Deep reasoning task detected', confidence: 0.8 };
-  }
-
-  // Code generation / transformation -> GPT-5.4
-  const codeGenKeywords = ['refactor', 'implement', 'build', 'create a', 'write code', 'full stack', 'api endpoint', 'component'];
-  if (codeGenKeywords.some(k => lower.includes(k))) {
-    return { model: 'gpt-5.4', reasoning: 'Complex code generation task', confidence: 0.75 };
-  }
-
-  // Quick tasks, Q&A, small edits -> Gemini (fast + cost effective)
-  return { model: 'gemini-2.5-pro', reasoning: 'Standard task - using fast model', confidence: 0.7 };
-}
-
-/**
- * Execute request with Gemini 2.5 Pro (multimodal + Google Search)
- */
-async function callGemini(message: string, context?: string, attachments?: Attachment[]): Promise<ChatResponse> {
-  const useSearch = needsSearch(message);
-
-  // Try the latest model, fall back to stable versions
-  const modelName = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-
-  const model = gemini.getGenerativeModel({
-    model: modelName,
-    ...(useSearch ? { tools: [{ googleSearch: {} } as any] } : {}),
-  });
-
-  const systemPrompt = `You are an expert full-stack developer helping users build applications through natural language.
+// ---------------------------------------------------------------------------
+// Shared system prompt
+// ---------------------------------------------------------------------------
+const SYSTEM_PROMPT = (context?: string) =>
+  `You are an expert full-stack developer helping users build applications through natural language.
 Generate clean, production-ready code. Always explain what you're building and why.
 When you receive files (images, PDFs, CSVs), analyze their content and use it as context.
 
@@ -102,342 +97,330 @@ IMPORTANT — when generating code files, annotate EVERY code block with its fil
 This enables automatic file deployment to the live sandbox. Use relative paths from the project root.
 ${context ? `\nProject context:\n${context}` : ''}`;
 
-  // Build multimodal parts
-  const parts: Part[] = [{ text: message }];
+// ---------------------------------------------------------------------------
+// Routing
+// ---------------------------------------------------------------------------
+export function routeRequest(
+  message: string,
+  preferredModel?: string,
+  hasAttachments?: boolean,
+): RoutingDecision {
+  if (preferredModel && preferredModel !== 'auto') {
+    // Normalise legacy model names
+    const m = preferredModel === 'gpt-5.4' || preferredModel === 'gpt-4'
+      ? 'gpt-4o'
+      : preferredModel === 'gemini-2.5-pro' || preferredModel === 'gemini'
+        ? 'gemini'
+        : preferredModel === 'hermes' || preferredModel === 'claude-3-5-sonnet' || preferredModel === 'claude'
+          ? 'claude-sonnet'
+          : preferredModel as RoutingDecision['model'];
+    return { model: m, reasoning: 'User preference', confidence: 1.0 };
+  }
 
+  // Attachments → GPT-4o (best vision) or Gemini (also multimodal)
+  if (hasAttachments) {
+    return { model: 'gemini', reasoning: 'Multimodal input – Gemini vision via Vertex AI', confidence: 0.9 };
+  }
+
+  const lower = message.toLowerCase();
+
+  // Deep reasoning / architecture → Claude
+  const claudeKeywords = [
+    'analyze', 'analyse', 'compare', 'trade-off', 'tradeoff',
+    'design pattern', 'explain why', 'review', 'best approach',
+    'pros and cons', 'strategy',
+  ];
+  if (claudeKeywords.some(k => lower.includes(k))) {
+    return { model: 'claude-sonnet', reasoning: 'Reasoning/analysis task – Claude Sonnet on Vertex', confidence: 0.85 };
+  }
+
+  // Code generation, web/app tasks → Gemini (via Vertex, uses your credits)
+  const geminiKeywords = [
+    'build', 'create', 'generate', 'implement', 'write code',
+    'full stack', 'api endpoint', 'component', 'function',
+    'refactor', 'fix', 'debug',
+  ];
+  if (geminiKeywords.some(k => lower.includes(k))) {
+    return { model: 'gemini', reasoning: 'Code generation – Gemini via Vertex AI', confidence: 0.85 };
+  }
+
+  // Default → Gemini (Vertex AI credits, no additional cost)
+  return { model: 'gemini', reasoning: 'Standard task – Gemini via Vertex AI', confidence: 0.75 };
+}
+
+// ---------------------------------------------------------------------------
+// Non-streaming: Gemini via Vertex AI
+// ---------------------------------------------------------------------------
+async function callGemini(message: string, context?: string, attachments?: Attachment[]): Promise<ChatResponse> {
+  const modelName = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+  const client = getGemini();
+
+  const parts: any[] = [{ text: message }];
   if (attachments && attachments.length > 0) {
-    for (const attachment of attachments) {
-      if (attachment.mimeType === 'text/csv') {
-        // For CSV, decode and include as text
-        const csvText = Buffer.from(attachment.data, 'base64').toString('utf-8');
-        parts.push({ text: `\n\n[File: ${attachment.filename}]\n${csvText}` });
+    for (const att of attachments) {
+      if (att.mimeType === 'text/csv') {
+        parts.push({ text: `\n[File: ${att.filename}]\n${Buffer.from(att.data, 'base64').toString('utf-8')}` });
       } else {
-        // For images and PDFs, use inline data
-        parts.push({
-          inlineData: {
-            mimeType: attachment.mimeType,
-            data: attachment.data,
-          },
-        });
+        parts.push({ inlineData: { mimeType: att.mimeType, data: att.data } });
       }
     }
   }
 
   try {
-    const chat = model.startChat({
-      history: [
-        { role: 'user', parts: [{ text: systemPrompt }] },
-        { role: 'model', parts: [{ text: 'Understood. I\'m ready to help you build your application. I can analyze images, PDFs, and CSVs you share.' }] },
-      ],
+    const response = await (client as any).models.generateContent({
+      model: modelName,
+      contents: [{ role: 'user', parts }],
+      config: { systemInstruction: SYSTEM_PROMPT(context), maxOutputTokens: 8192, temperature: 0.7 },
     });
 
-    const result = await chat.sendMessage(parts);
-    const response = result.response;
-
-    // Check for grounding/search metadata
-    const groundingMetadata = (response.candidates?.[0] as any)?.groundingMetadata;
-    const searchSources: Array<{ title: string; url: string }> = [];
-
-    if (groundingMetadata?.groundingChunks) {
-      for (const chunk of groundingMetadata.groundingChunks) {
-        if (chunk.web) {
-          searchSources.push({ title: chunk.web.title || '', url: chunk.web.uri || '' });
-        }
-      }
-    }
-
     return {
-      content: response.text(),
-      model: 'gemini-2.5-pro',
+      content: response.text || '',
+      model: `gemini-vertex/${modelName}`,
       tokensUsed: response.usageMetadata?.totalTokenCount || 0,
-      usedSearch: searchSources.length > 0,
-      searchSources: searchSources.length > 0 ? searchSources : undefined,
     };
   } catch (err: any) {
-    console.error(`[Gemini] API call failed (model: ${modelName}):`, err.message);
-    throw new Error(`Gemini API error: ${err.message}`);
+    console.error('[Gemini/Vertex] API call failed:', err.message);
+    throw new Error(`Gemini Vertex API error: ${err.message}`);
   }
 }
 
-/**
- * Execute request with GPT-5.4 (supports images via URL)
- */
+// ---------------------------------------------------------------------------
+// Non-streaming: GPT-4o (fallback)
+// ---------------------------------------------------------------------------
 async function callGPT(message: string, context?: string, attachments?: Attachment[]): Promise<ChatResponse> {
   const content: Array<any> = [{ type: 'text', text: message }];
-
-  if (attachments && attachments.length > 0) {
-    for (const attachment of attachments) {
-      if (attachment.mimeType.startsWith('image/')) {
-        content.push({
-          type: 'image_url',
-          image_url: { url: `data:${attachment.mimeType};base64,${attachment.data}` },
-        });
-      } else if (attachment.mimeType === 'text/csv') {
-        const csvText = Buffer.from(attachment.data, 'base64').toString('utf-8');
-        content.push({ type: 'text', text: `\n[File: ${attachment.filename}]\n${csvText}` });
-      } else if (attachment.mimeType === 'application/pdf') {
-        content.push({ type: 'text', text: `\n[Attached PDF: ${attachment.filename} - content not directly readable by this model, please describe what you need from it]` });
+  if (attachments) {
+    for (const att of attachments) {
+      if (att.mimeType.startsWith('image/')) {
+        content.push({ type: 'image_url', image_url: { url: `data:${att.mimeType};base64,${att.data}` } });
+      } else if (att.mimeType === 'text/csv') {
+        content.push({ type: 'text', text: `\n[File: ${att.filename}]\n${Buffer.from(att.data, 'base64').toString('utf-8')}` });
       }
     }
   }
-
   try {
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        {
-          role: 'system',
-          content: `You are an expert full-stack developer helping users build applications through natural language.
-Generate clean, production-ready code. Always explain what you're building and why.
-When you receive images or file content, analyze them and use as context.
-
-IMPORTANT — when generating code files, annotate EVERY code block with its file path:
-\`\`\`typescript
-// filepath: src/components/App.tsx
-...code...
-\`\`\`
-This enables automatic file deployment to the live sandbox. Use relative paths from the project root.
-${context ? `\nProject context:\n${context}` : ''}`,
-        },
+    const res = await getOpenAI().chat.completions.create({
+      model: 'gpt-4o', messages: [
+        { role: 'system', content: SYSTEM_PROMPT(context) },
         { role: 'user', content },
-      ],
-      max_tokens: 8192,
-      temperature: 0.7,
+      ], max_tokens: 8192, temperature: 0.7,
     });
-
-    return {
-      content: response.choices[0]?.message?.content || '',
-      model: 'gpt-5.4',
-      tokensUsed: response.usage?.total_tokens || 0,
-    };
+    return { content: res.choices[0]?.message?.content || '', model: 'gpt-4o', tokensUsed: res.usage?.total_tokens || 0 };
   } catch (err: any) {
-    console.error('[GPT] API call failed:', err.message);
+    console.error('[GPT-4o] API call failed:', err.message);
     throw new Error(`OpenAI API error: ${err.message}`);
   }
 }
 
-/**
- * Execute request with Hermes (via worker API)
- */
-async function callHermes(message: string, context?: string, attachments?: Attachment[]): Promise<ChatResponse> {
-  const hermesUrl = process.env.HERMES_WORKER_URL || 'http://localhost:8000';
-
-  // For Hermes, include file descriptions in the prompt
-  let fullMessage = message;
-  if (attachments && attachments.length > 0) {
-    const fileDescs = attachments.map(a => {
-      if (a.mimeType === 'text/csv') {
-        const csvText = Buffer.from(a.data, 'base64').toString('utf-8');
-        return `[File: ${a.filename}]\n${csvText}`;
+// ---------------------------------------------------------------------------
+// Non-streaming: Claude 3.5 Sonnet (fallback)
+// ---------------------------------------------------------------------------
+async function callClaude(message: string, context?: string, attachments?: Attachment[]): Promise<ChatResponse> {
+  const blocks: AnthropicVertex.MessageParam['content'] = [];
+  if (attachments) {
+    for (const att of attachments) {
+      if (att.mimeType.startsWith('image/')) {
+        blocks.push({ type: 'image', source: { type: 'base64', media_type: att.mimeType as any, data: att.data } });
+      } else if (att.mimeType === 'text/csv') {
+        blocks.push({ type: 'text', text: `[File: ${att.filename}]\n${Buffer.from(att.data, 'base64').toString('utf-8')}` });
       }
-      return `[Attached file: ${a.filename} (${a.mimeType})]`;
-    });
-    fullMessage = `${message}\n\n${fileDescs.join('\n')}`;
-  }
-
-  try {
-    const response = await fetch(`${hermesUrl}/reason`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: fullMessage, context }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Hermes worker returned ${response.status}`);
     }
-
-    const data = await response.json() as { response: string; tokens_used?: number };
-    return {
-      content: data.response,
-      model: 'hermes',
-      tokensUsed: data.tokens_used || 0,
-    };
+  }
+  blocks.push({ type: 'text', text: message });
+  try {
+    const res = await getAnthropic().messages.create({
+      model: 'claude-sonnet-4-6',    // Claude Sonnet 4.6 on Vertex
+      max_tokens: 8192,
+      system: SYSTEM_PROMPT(context),
+      messages: [{ role: 'user', content: blocks }],
+    });
+    const text = res.content.filter((b): b is AnthropicVertex.TextBlock => b.type === 'text').map(b => b.text).join('');
+    return { content: text, model: 'claude-sonnet-4-6-vertex', tokensUsed: res.usage.input_tokens + res.usage.output_tokens };
   } catch (err: any) {
-    console.error('[Hermes] API call failed:', err.message);
-    throw new Error(`Hermes API error: ${err.message}`);
+    console.error('[Claude/Vertex] API call failed:', err.message);
+    throw new Error(`Claude Vertex API error: ${err.message}`);
   }
 }
 
-/**
- * Main entry point: route and execute a chat request
- * Includes fallback: if the primary model fails, try the next one
- */
-export async function processChat(request: ChatRequest): Promise<ChatResponse & { routingDecision: RoutingDecision }> {
-  // Skip cache if attachments present (multimodal requests are unique)
+// ---------------------------------------------------------------------------
+// Main entry: route + execute with cascading fallback
+// Gemini (Vertex) → GPT-4o → Claude
+// ---------------------------------------------------------------------------
+export async function processChat(
+  request: ChatRequest,
+): Promise<ChatResponse & { routingDecision: RoutingDecision }> {
   if (!request.attachments || request.attachments.length === 0) {
     const cacheKey = buildCacheKey(['chat', createHash('md5').update(request.message).digest('hex')]);
     const cached = await getCached(cacheKey);
     if (cached) {
-      const parsed = JSON.parse(cached);
-      return { ...parsed, routingDecision: { model: parsed.model, reasoning: 'Cached response', confidence: 1.0 } };
+      const p = JSON.parse(cached);
+      return { ...p, routingDecision: { model: p.model, reasoning: 'Cached response', confidence: 1.0 } };
     }
   }
 
-  // Route the request
   const routing = routeRequest(request.message, request.preferredModel, (request.attachments?.length || 0) > 0);
-
-  let response: ChatResponse;
   let lastError: Error | null = null;
 
-  // Try primary model, then fallback models
-  const modelOrder: Array<'gemini-2.5-pro' | 'gpt-5.4' | 'hermes'> = [routing.model];
-  if (!modelOrder.includes('gemini-2.5-pro')) modelOrder.push('gemini-2.5-pro');
-  if (!modelOrder.includes('gpt-5.4')) modelOrder.push('gpt-5.4');
+  // Fallback order: primary first, then the others
+  const order: RoutingDecision['model'][] = [routing.model];
+  if (!order.includes('gemini')) order.push('gemini');
+  if (!order.includes('gpt-4o')) order.push('gpt-4o');
+  if (!order.includes('claude-3-5-sonnet')) order.push('claude-3-5-sonnet');
 
-  for (const model of modelOrder) {
+  for (const model of order) {
     try {
-      switch (model) {
-        case 'gemini-2.5-pro':
-          response = await callGemini(request.message, request.context, request.attachments);
-          break;
-        case 'gpt-5.4':
-          response = await callGPT(request.message, request.context, request.attachments);
-          break;
-        case 'hermes':
-          response = await callHermes(request.message, request.context, request.attachments);
-          break;
-        default:
-          response = await callGemini(request.message, request.context, request.attachments);
-      }
+      let response: ChatResponse;
+      if (model === 'gemini') response = await callGemini(request.message, request.context, request.attachments);
+      else if (model === 'gpt-4o') response = await callGPT(request.message, request.context, request.attachments);
+      else response = await callClaude(request.message, request.context, request.attachments);
 
-      // If we get here, the call succeeded
       if (model !== routing.model) {
-        console.log(`[Router] Primary model ${routing.model} failed, used fallback: ${model}`);
+        console.log(`[Router] Primary ${routing.model} failed, used fallback: ${model}`);
         routing.model = model;
-        routing.reasoning += ` (fallback from ${routing.model})`;
       }
-
-      // Cache text-only responses
       if (!request.attachments || request.attachments.length === 0) {
         const cacheKey = buildCacheKey(['chat', createHash('md5').update(request.message).digest('hex')]);
-        await setCache(cacheKey, JSON.stringify(response!), 300);
+        await setCache(cacheKey, JSON.stringify(response), 300);
       }
-
-      return { ...response!, routingDecision: routing };
+      return { ...response, routingDecision: routing };
     } catch (err: any) {
       lastError = err;
       console.warn(`[Router] Model ${model} failed: ${err.message}, trying next...`);
-      continue;
     }
   }
-
-  // All models failed
-  throw lastError || new Error('All AI models failed to respond');
+  throw lastError || new Error('All AI models failed');
 }
 
-/**
- * Streaming version: yields content chunks as they arrive
- */
-export async function* processChatStream(request: ChatRequest): AsyncGenerator<{ type: 'token' | 'done' | 'error' | 'info'; content: string; model?: string; tokensUsed?: number }> {
+// ---------------------------------------------------------------------------
+// Streaming entry
+// ---------------------------------------------------------------------------
+export async function* processChatStream(
+  request: ChatRequest,
+): AsyncGenerator<{ type: 'token' | 'done' | 'error' | 'info'; content: string; model?: string; tokensUsed?: number }> {
   const routing = routeRequest(request.message, request.preferredModel, (request.attachments?.length || 0) > 0);
-  
   yield { type: 'info', content: JSON.stringify({ model: routing.model, reasoning: routing.reasoning }) };
 
-  try {
-    switch (routing.model) {
-      case 'gemini-2.5-pro':
+  // Primary then fallback
+  const order: RoutingDecision['model'][] = [routing.model];
+  if (!order.includes('gemini')) order.push('gemini');
+  if (!order.includes('gpt-4o')) order.push('gpt-4o');
+  if (!order.includes('claude-3-5-sonnet')) order.push('claude-3-5-sonnet');
+
+  for (const model of order) {
+    try {
+      if (model === 'gemini') {
         yield* streamGemini(request.message, request.context, request.attachments);
-        break;
-      case 'gpt-5.4':
+      } else if (model === 'gpt-4o') {
         yield* streamGPT(request.message, request.context, request.attachments);
-        break;
-      case 'hermes':
-        // Hermes doesn't support streaming well, fall back to Gemini stream
-        yield* streamGemini(request.message, request.context, request.attachments);
-        break;
-      default:
-        yield* streamGemini(request.message, request.context, request.attachments);
-    }
-  } catch (err: any) {
-    yield { type: 'error', content: err.message };
-  }
-}
-
-async function* streamGemini(message: string, context?: string, attachments?: Attachment[]): AsyncGenerator<{ type: 'token' | 'done'; content: string; model?: string; tokensUsed?: number }> {
-  const modelName = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-  const model = gemini.getGenerativeModel({ model: modelName });
-
-  const systemPrompt = `You are an expert full-stack developer helping users build applications through natural language.
-Generate clean, production-ready code. Always explain what you're building and why.
-
-IMPORTANT — when generating code files, annotate EVERY code block with its file path:
-\`\`\`typescript
-// filepath: src/components/App.tsx
-...code...
-\`\`\`
-This enables automatic file deployment to the live sandbox. Use relative paths from the project root.
-${context ? `\nProject context:\n${context}` : ''}`;
-
-  const parts: Part[] = [{ text: message }];
-  if (attachments && attachments.length > 0) {
-    for (const attachment of attachments) {
-      if (attachment.mimeType === 'text/csv') {
-        const csvText = Buffer.from(attachment.data, 'base64').toString('utf-8');
-        parts.push({ text: `\n\n[File: ${attachment.filename}]\n${csvText}` });
       } else {
-        parts.push({ inlineData: { mimeType: attachment.mimeType, data: attachment.data } });
+        yield* streamClaude(request.message, request.context, request.attachments);
+      }
+      return; // success
+    } catch (err: any) {
+      console.warn(`[Router] Stream model ${model} failed: ${err.message}, trying next...`);
+      if (model !== order[order.length - 1]) {
+        yield { type: 'info', content: JSON.stringify({ model: order[order.indexOf(model) + 1], reasoning: `Fallback from ${model}` }) };
       }
     }
   }
-
-  const chat = model.startChat({
-    history: [
-      { role: 'user', parts: [{ text: systemPrompt }] },
-      { role: 'model', parts: [{ text: 'Understood. I\'m ready to help.' }] },
-    ],
-  });
-
-  const result = await chat.sendMessageStream(parts);
-  
-  for await (const chunk of result.stream) {
-    const text = chunk.text();
-    if (text) {
-      yield { type: 'token', content: text };
-    }
-  }
-
-  const response = await result.response;
-  yield { type: 'done', content: '', model: 'gemini-2.5-pro', tokensUsed: response.usageMetadata?.totalTokenCount || 0 };
+  yield { type: 'error', content: 'All AI models failed to stream a response' };
 }
 
-async function* streamGPT(message: string, context?: string, attachments?: Attachment[]): AsyncGenerator<{ type: 'token' | 'done'; content: string; model?: string; tokensUsed?: number }> {
-  const content: Array<any> = [{ type: 'text', text: message }];
-  if (attachments && attachments.length > 0) {
-    for (const attachment of attachments) {
-      if (attachment.mimeType.startsWith('image/')) {
-        content.push({ type: 'image_url', image_url: { url: `data:${attachment.mimeType};base64,${attachment.data}` } });
-      } else if (attachment.mimeType === 'text/csv') {
-        const csvText = Buffer.from(attachment.data, 'base64').toString('utf-8');
-        content.push({ type: 'text', text: `\n[File: ${attachment.filename}]\n${csvText}` });
+// ---------------------------------------------------------------------------
+// Streaming: Gemini via Vertex AI
+// ---------------------------------------------------------------------------
+async function* streamGemini(
+  message: string, context?: string, attachments?: Attachment[],
+): AsyncGenerator<{ type: 'token' | 'done'; content: string; model?: string; tokensUsed?: number }> {
+  const modelName = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+  const client = getGemini();
+  const parts: any[] = [{ text: message }];
+  if (attachments) {
+    for (const att of attachments) {
+      if (att.mimeType === 'text/csv') {
+        parts.push({ text: `\n[File: ${att.filename}]\n${Buffer.from(att.data, 'base64').toString('utf-8')}` });
+      } else {
+        parts.push({ inlineData: { mimeType: att.mimeType, data: att.data } });
       }
     }
   }
 
-  const stream = await openai.chat.completions.create({
-    model: 'gpt-4o',
-    messages: [
-    { role: 'system', content: `You are an expert full-stack developer. Generate clean, production-ready code.
-
-IMPORTANT — annotate EVERY code block with its file path:
-\`\`\`typescript
-// filepath: src/components/App.tsx
-...code...
-\`\`\`
-This enables automatic file deployment to the live sandbox. Use relative paths from the project root.
-${context ? `Project context:\n${context}` : ''}` },
-      { role: 'user', content },
-    ],
-    max_tokens: 8192,
-    temperature: 0.7,
-    stream: true,
+  const stream = await (client as any).models.generateContentStream({
+    model: modelName,
+    contents: [{ role: 'user', parts }],
+    config: { systemInstruction: SYSTEM_PROMPT(context), maxOutputTokens: 8192, temperature: 0.7 },
   });
 
+  let totalTokens = 0;
+  for await (const chunk of stream) {
+    const text = chunk.text;
+    if (text) yield { type: 'token', content: text };
+    if (chunk.usageMetadata?.totalTokenCount) totalTokens = chunk.usageMetadata.totalTokenCount;
+  }
+  yield { type: 'done', content: '', model: `gemini-vertex/${modelName}`, tokensUsed: totalTokens };
+}
+
+// ---------------------------------------------------------------------------
+// Streaming: GPT-4o
+// ---------------------------------------------------------------------------
+async function* streamGPT(
+  message: string, context?: string, attachments?: Attachment[],
+): AsyncGenerator<{ type: 'token' | 'done'; content: string; model?: string; tokensUsed?: number }> {
+  const content: any[] = [{ type: 'text', text: message }];
+  if (attachments) {
+    for (const att of attachments) {
+      if (att.mimeType.startsWith('image/')) {
+        content.push({ type: 'image_url', image_url: { url: `data:${att.mimeType};base64,${att.data}` } });
+      } else if (att.mimeType === 'text/csv') {
+        content.push({ type: 'text', text: `\n[File: ${att.filename}]\n${Buffer.from(att.data, 'base64').toString('utf-8')}` });
+      }
+    }
+  }
+  const stream = await getOpenAI().chat.completions.create({
+    model: 'gpt-4o',
+    messages: [{ role: 'system', content: SYSTEM_PROMPT(context) }, { role: 'user', content }],
+    max_tokens: 8192, temperature: 0.7, stream: true,
+  });
   for await (const chunk of stream) {
     const delta = chunk.choices[0]?.delta?.content;
-    if (delta) {
-      yield { type: 'token', content: delta };
+    if (delta) yield { type: 'token', content: delta };
+  }
+  yield { type: 'done', content: '', model: 'gpt-4o', tokensUsed: 0 };
+}
+
+// ---------------------------------------------------------------------------
+// Streaming: Claude 3.5 Sonnet
+// ---------------------------------------------------------------------------
+async function* streamClaude(
+  message: string, context?: string, attachments?: Attachment[],
+): AsyncGenerator<{ type: 'token' | 'done'; content: string; model?: string; tokensUsed?: number }> {
+  const blocks: AnthropicVertex.MessageParam['content'] = [];
+  if (attachments) {
+    for (const att of attachments) {
+      if (att.mimeType.startsWith('image/')) {
+        blocks.push({ type: 'image', source: { type: 'base64', media_type: att.mimeType as any, data: att.data } });
+      } else if (att.mimeType === 'text/csv') {
+        blocks.push({ type: 'text', text: `[File: ${att.filename}]\n${Buffer.from(att.data, 'base64').toString('utf-8')}` });
+      }
     }
   }
+  blocks.push({ type: 'text', text: message });
 
-  yield { type: 'done', content: '', model: 'gpt-5.4', tokensUsed: 0 };
+  let inputTokens = 0, outputTokens = 0;
+  const stream = await getAnthropic().messages.stream({
+    model: 'claude-sonnet-4-6',    // Claude Sonnet 4.6 on Vertex
+    max_tokens: 8192,
+    system: SYSTEM_PROMPT(context),
+    messages: [{ role: 'user', content: blocks }],
+  });
+  for await (const event of stream) {
+    if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+      yield { type: 'token', content: event.delta.text };
+    } else if (event.type === 'message_start' && (event as any).message?.usage) {
+      inputTokens = (event as any).message.usage.input_tokens || 0;
+    } else if (event.type === 'message_delta' && (event as any).usage) {
+      outputTokens = (event as any).usage.output_tokens || 0;
+    }
+  }
+  yield { type: 'done', content: '', model: 'claude-sonnet-4-6-vertex', tokensUsed: inputTokens + outputTokens };
 }
