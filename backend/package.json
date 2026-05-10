@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.95.1",
+    "@anthropic-ai/vertex-sdk": "^0.16.0",
     "@clerk/backend": "^1.20.0",
     "@e2b/code-interpreter": "^1.0.0",
     "@google/genai": "^2.0.1",
@@ -22,7 +23,6 @@
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
     "multer": "^2.1.1",
-    "openai": "^4.73.0",
     "pg": "^8.13.0",
     "uuid": "^10.0.0"
   },

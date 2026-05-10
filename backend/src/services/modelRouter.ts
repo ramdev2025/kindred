@@ -1,5 +1,5 @@
-import OpenAI from 'openai';
-import { AnthropicVertex } from '@anthropic-ai/sdk';
+import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
+import { Anthropic } from '@anthropic-ai/sdk';
 import { GoogleGenAI } from '@google/genai';
 import { getCached, setCache, buildCacheKey } from './cache';
 import { createHash } from 'crypto';
@@ -7,18 +7,8 @@ import { createHash } from 'crypto';
 // ---------------------------------------------------------------------------
 // Lazy AI client initialisation (after dotenv.config() has run)
 // ---------------------------------------------------------------------------
-let _openai: OpenAI | null = null;
 let _anthropic: AnthropicVertex | null = null;
 let _gemini: GoogleGenAI | null = null;
-
-function getOpenAI(): OpenAI {
-  if (!_openai) {
-    const apiKey = process.env.OPENAI_API_KEY || '';
-    if (!apiKey) console.warn('[OpenAI] OPENAI_API_KEY is not set!');
-    _openai = new OpenAI({ apiKey });
-  }
-  return _openai;
-}
 
 function getAnthropic(): AnthropicVertex {
   if (!_anthropic) {
@@ -56,7 +46,7 @@ function getGemini(): GoogleGenAI {
 // Interfaces
 // ---------------------------------------------------------------------------
 export interface RoutingDecision {
-  model: 'gemini' | 'gpt-4o' | 'claude-sonnet';
+  model: 'gemini' | 'claude-sonnet';
   reasoning: string;
   confidence: number;
 }
@@ -79,6 +69,8 @@ export interface ChatResponse {
   content: string;
   model: string;
   tokensUsed: number;
+  usedSearch?: boolean;
+  searchSources?: any[];
 }
 
 // ---------------------------------------------------------------------------
@@ -107,8 +99,8 @@ export function routeRequest(
 ): RoutingDecision {
   if (preferredModel && preferredModel !== 'auto') {
     // Normalise legacy model names
-    const m = preferredModel === 'gpt-5.4' || preferredModel === 'gpt-4'
-      ? 'gpt-4o'
+    const m = preferredModel === 'gpt-5.4' || preferredModel === 'gpt-4' || preferredModel === 'gpt-4o'
+      ? 'gemini'
       : preferredModel === 'gemini-2.5-pro' || preferredModel === 'gemini'
         ? 'gemini'
         : preferredModel === 'hermes' || preferredModel === 'claude-3-5-sonnet' || preferredModel === 'claude'
@@ -117,7 +109,7 @@ export function routeRequest(
     return { model: m, reasoning: 'User preference', confidence: 1.0 };
   }
 
-  // Attachments → GPT-4o (best vision) or Gemini (also multimodal)
+  // Attachments → Gemini (multimodal)
   if (hasAttachments) {
     return { model: 'gemini', reasoning: 'Multimodal input – Gemini vision via Vertex AI', confidence: 0.9 };
   }
@@ -184,39 +176,13 @@ async function callGemini(message: string, context?: string, attachments?: Attac
   }
 }
 
-// ---------------------------------------------------------------------------
-// Non-streaming: GPT-4o (fallback)
-// ---------------------------------------------------------------------------
-async function callGPT(message: string, context?: string, attachments?: Attachment[]): Promise<ChatResponse> {
-  const content: Array<any> = [{ type: 'text', text: message }];
-  if (attachments) {
-    for (const att of attachments) {
-      if (att.mimeType.startsWith('image/')) {
-        content.push({ type: 'image_url', image_url: { url: `data:${att.mimeType};base64,${att.data}` } });
-      } else if (att.mimeType === 'text/csv') {
-        content.push({ type: 'text', text: `\n[File: ${att.filename}]\n${Buffer.from(att.data, 'base64').toString('utf-8')}` });
-      }
-    }
-  }
-  try {
-    const res = await getOpenAI().chat.completions.create({
-      model: 'gpt-4o', messages: [
-        { role: 'system', content: SYSTEM_PROMPT(context) },
-        { role: 'user', content },
-      ], max_tokens: 8192, temperature: 0.7,
-    });
-    return { content: res.choices[0]?.message?.content || '', model: 'gpt-4o', tokensUsed: res.usage?.total_tokens || 0 };
-  } catch (err: any) {
-    console.error('[GPT-4o] API call failed:', err.message);
-    throw new Error(`OpenAI API error: ${err.message}`);
-  }
-}
+
 
 // ---------------------------------------------------------------------------
 // Non-streaming: Claude 3.5 Sonnet (fallback)
 // ---------------------------------------------------------------------------
 async function callClaude(message: string, context?: string, attachments?: Attachment[]): Promise<ChatResponse> {
-  const blocks: AnthropicVertex.MessageParam['content'] = [];
+  const blocks: Anthropic.MessageParam['content'] = [];
   if (attachments) {
     for (const att of attachments) {
       if (att.mimeType.startsWith('image/')) {
@@ -234,7 +200,7 @@ async function callClaude(message: string, context?: string, attachments?: Attac
       system: SYSTEM_PROMPT(context),
       messages: [{ role: 'user', content: blocks }],
     });
-    const text = res.content.filter((b): b is AnthropicVertex.TextBlock => b.type === 'text').map(b => b.text).join('');
+    const text = res.content.filter((b: any): b is Anthropic.TextBlock => b.type === 'text').map((b: any) => b.text).join('');
     return { content: text, model: 'claude-sonnet-4-6-vertex', tokensUsed: res.usage.input_tokens + res.usage.output_tokens };
   } catch (err: any) {
     console.error('[Claude/Vertex] API call failed:', err.message);
@@ -264,14 +230,12 @@ export async function processChat(
   // Fallback order: primary first, then the others
   const order: RoutingDecision['model'][] = [routing.model];
   if (!order.includes('gemini')) order.push('gemini');
-  if (!order.includes('gpt-4o')) order.push('gpt-4o');
-  if (!order.includes('claude-3-5-sonnet')) order.push('claude-3-5-sonnet');
+  if (!order.includes('claude-sonnet')) order.push('claude-sonnet');
 
   for (const model of order) {
     try {
       let response: ChatResponse;
       if (model === 'gemini') response = await callGemini(request.message, request.context, request.attachments);
-      else if (model === 'gpt-4o') response = await callGPT(request.message, request.context, request.attachments);
       else response = await callClaude(request.message, request.context, request.attachments);
 
       if (model !== routing.model) {
@@ -303,15 +267,12 @@ export async function* processChatStream(
   // Primary then fallback
   const order: RoutingDecision['model'][] = [routing.model];
   if (!order.includes('gemini')) order.push('gemini');
-  if (!order.includes('gpt-4o')) order.push('gpt-4o');
-  if (!order.includes('claude-3-5-sonnet')) order.push('claude-3-5-sonnet');
+  if (!order.includes('claude-sonnet')) order.push('claude-sonnet');
 
   for (const model of order) {
     try {
       if (model === 'gemini') {
         yield* streamGemini(request.message, request.context, request.attachments);
-      } else if (model === 'gpt-4o') {
-        yield* streamGPT(request.message, request.context, request.attachments);
       } else {
         yield* streamClaude(request.message, request.context, request.attachments);
       }
@@ -360,33 +321,7 @@ async function* streamGemini(
   yield { type: 'done', content: '', model: `gemini-vertex/${modelName}`, tokensUsed: totalTokens };
 }
 
-// ---------------------------------------------------------------------------
-// Streaming: GPT-4o
-// ---------------------------------------------------------------------------
-async function* streamGPT(
-  message: string, context?: string, attachments?: Attachment[],
-): AsyncGenerator<{ type: 'token' | 'done'; content: string; model?: string; tokensUsed?: number }> {
-  const content: any[] = [{ type: 'text', text: message }];
-  if (attachments) {
-    for (const att of attachments) {
-      if (att.mimeType.startsWith('image/')) {
-        content.push({ type: 'image_url', image_url: { url: `data:${att.mimeType};base64,${att.data}` } });
-      } else if (att.mimeType === 'text/csv') {
-        content.push({ type: 'text', text: `\n[File: ${att.filename}]\n${Buffer.from(att.data, 'base64').toString('utf-8')}` });
-      }
-    }
-  }
-  const stream = await getOpenAI().chat.completions.create({
-    model: 'gpt-4o',
-    messages: [{ role: 'system', content: SYSTEM_PROMPT(context) }, { role: 'user', content }],
-    max_tokens: 8192, temperature: 0.7, stream: true,
-  });
-  for await (const chunk of stream) {
-    const delta = chunk.choices[0]?.delta?.content;
-    if (delta) yield { type: 'token', content: delta };
-  }
-  yield { type: 'done', content: '', model: 'gpt-4o', tokensUsed: 0 };
-}
+
 
 // ---------------------------------------------------------------------------
 // Streaming: Claude 3.5 Sonnet
@@ -394,7 +329,7 @@ async function* streamGPT(
 async function* streamClaude(
   message: string, context?: string, attachments?: Attachment[],
 ): AsyncGenerator<{ type: 'token' | 'done'; content: string; model?: string; tokensUsed?: number }> {
-  const blocks: AnthropicVertex.MessageParam['content'] = [];
+  const blocks: Anthropic.MessageParam['content'] = [];
   if (attachments) {
     for (const att of attachments) {
       if (att.mimeType.startsWith('image/')) {

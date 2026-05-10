@@ -550,7 +550,6 @@ USER REQUEST: ${message}`;
               >
                 <option value="auto">Auto Route</option>
                 <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
-                <option value="gpt-5.4">GPT-5.4</option>
                 <option value="hermes">Hermes (Deep)</option>
               </select>
               <TokenMeter contextStats={contextStats} />

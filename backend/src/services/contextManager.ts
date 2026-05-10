@@ -16,7 +16,6 @@ import { processChat } from './modelRouter';
 // but we leave headroom for the system prompt and response tokens.
 export const TOKEN_BUDGETS: Record<string, number> = {
   'gemini-2.5-pro': 100_000,
-  'gpt-5.4':         90_000,
   'hermes':          24_000,
   'auto':            90_000,
 };
