@@ -12,6 +12,7 @@ import {
   ChevronLeft,
   Sparkles,
   X,
+  Search,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -103,6 +104,19 @@ export default function Sidebar({ projects, onMobileClose }: SidebarProps) {
             </svg>
           </div>
           {!collapsed && "Dashboard"}
+        </Link>
+
+        <Link
+          href="/research"
+          onClick={handleNavClick}
+          className={`sidebar-item flex items-center gap-3 text-[13px] uppercase tracking-wide ${
+            pathname === "/research" ? "active" : ""
+          }`}
+        >
+          <div className="w-8 h-8 flex items-center justify-center shrink-0">
+            <Search className="w-4 h-4" />
+          </div>
+          {!collapsed && "Deep Research"}
         </Link>
       </nav>
 

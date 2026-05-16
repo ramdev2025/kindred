@@ -51,7 +51,7 @@ async function getContext(
  */
 chatRouter.post('/send', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { message, projectId, preferredModel, attachments: attachmentRefs } = req.body;
+    const { message, projectId, preferredModel, skill, attachments: attachmentRefs } = req.body;
     if (!message) return res.status(400).json({ error: 'Message is required' });
 
     const user = await findOrCreateUser(req.clerkId!, req.clerkId + '@user.clerk', undefined);
@@ -64,11 +64,12 @@ chatRouter.post('/send', async (req: AuthenticatedRequest, res: Response) => {
       context,
       projectId,
       preferredModel,
+      skill,
       attachments: await resolveAttachments(attachmentRefs),
     });
 
     if (session) {
-      await db.addMessage(session.id, 'assistant', response.content, response.model, response.tokensUsed);
+      await db.addMessage(session.id, 'assistant', response.content, response.model, response.tokensUsed, { skill });
     }
     await db.recordUsage(user.id, response.model, response.tokensUsed, 0, 'chat');
     try { recordTokenUsage(user.id, response.tokensUsed); } catch {} // update quota counter
@@ -94,7 +95,7 @@ chatRouter.post('/send', async (req: AuthenticatedRequest, res: Response) => {
  */
 chatRouter.post('/stream', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { message, projectId, preferredModel, attachments: attachmentRefs } = req.body;
+    const { message, projectId, preferredModel, skill, attachments: attachmentRefs } = req.body;
     if (!message) return res.status(400).json({ error: 'Message is required' });
 
     res.setHeader('Content-Type', 'text/event-stream');
@@ -119,6 +120,7 @@ chatRouter.post('/stream', async (req: AuthenticatedRequest, res: Response) => {
       context,
       projectId,
       preferredModel,
+      skill,
       attachments,
     })) {
       if (chunk.type === 'token') {
@@ -135,7 +137,7 @@ chatRouter.post('/stream', async (req: AuthenticatedRequest, res: Response) => {
     }
 
     if (session && fullContent) {
-      await db.addMessage(session.id, 'assistant', fullContent, modelUsed, tokensUsed);
+      await db.addMessage(session.id, 'assistant', fullContent, modelUsed, tokensUsed, { skill });
     }
     if (user && modelUsed) {
       await db.recordUsage(user.id, modelUsed, tokensUsed, 0, 'chat');
@@ -191,7 +193,7 @@ chatRouter.get('/history/:sessionId', async (req: AuthenticatedRequest, res: Res
 chatRouter.post('/agentic', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const {
-      message, projectId, preferredModel,
+      message, projectId, preferredModel, skill,
       sandboxId, maxIterations, attachments: attachmentRefs,
     } = req.body;
 
@@ -222,6 +224,7 @@ chatRouter.post('/agentic', async (req: AuthenticatedRequest, res: Response) => 
       context,
       projectId,
       preferredModel,
+      skill,
       attachments: await resolveAttachments(attachmentRefs),
     })) {
       if (chunk.type === 'token') {
@@ -257,6 +260,7 @@ chatRouter.post('/agentic', async (req: AuthenticatedRequest, res: Response) => 
       originalMessage: message,
       context,
       preferredModel,
+      skill,
       maxIterations: maxIterations || 3,
     })) {
       if (res.destroyed) break;
@@ -264,6 +268,9 @@ chatRouter.post('/agentic', async (req: AuthenticatedRequest, res: Response) => 
 
       if (event.type === 'fix_done' && session && event.content) {
         await db.addMessage(session.id, 'assistant', event.content, modelUsed, 0);
+      }
+      if (event.type === 'loop_complete' && event.success && event.previewUrl && projectId) {
+        await db.updateProject(projectId, { preview_url: event.previewUrl }).catch(() => {});
       }
     }
 

@@ -86,12 +86,19 @@ export async function getChatSession(projectId: string) {
 }
 
 // --- Chat Messages ---
-export async function addMessage(sessionId: string, role: string, content: string, modelUsed?: string, tokensUsed?: number) {
+export async function addMessage(
+  sessionId: string,
+  role: string,
+  content: string,
+  modelUsed?: string,
+  tokensUsed?: number,
+  metadata?: Record<string, any>,
+) {
   const id = uuidv4();
   const now = new Date().toISOString();
   await query(
-    'INSERT INTO chat_messages (id, session_id, role, content, model_used, tokens_used, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-    [id, sessionId, role, content, modelUsed || null, tokensUsed || 0, now]
+    'INSERT INTO chat_messages (id, session_id, role, content, model_used, tokens_used, metadata, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+    [id, sessionId, role, content, modelUsed || null, tokensUsed || 0, JSON.stringify(metadata ?? {}), now]
   );
   const result = await query('SELECT * FROM chat_messages WHERE id = $1', [id]);
   return result.rows[0];
@@ -256,12 +263,25 @@ export async function getSessionTokenUsage(sessionId: string): Promise<number> {
 }
 
 // --- Usage Stats ---
+// Cost estimate: returns USD cents based on public pricing
+function estimateCostCents(model: string, tokensInput: number, tokensOutput: number): number {
+  const m = model.toLowerCase();
+  // Rates: USD per 1M tokens → multiply by 100 for cents
+  const rate = m.includes('claude')
+    ? { input: 3.00, output: 15.00 }    // Claude Sonnet 4
+    : m.includes('2.5-pro') || m.includes('gemini-2.5')
+    ? { input: 1.25, output: 10.00 }    // Gemini 2.5 Pro
+    : { input: 0.075, output: 0.30 };   // Gemini 2.0 Flash (default)
+  return ((tokensInput / 1_000_000) * rate.input + (tokensOutput / 1_000_000) * rate.output) * 100;
+}
+
 export async function recordUsage(userId: string, model: string, tokensInput: number, tokensOutput: number, requestType: string) {
   const id = uuidv4();
   const now = new Date().toISOString();
+  const costCents = estimateCostCents(model, tokensInput, tokensOutput);
   await query(
-    'INSERT INTO usage_stats (id, user_id, model, tokens_input, tokens_output, request_type, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-    [id, userId, model, tokensInput, tokensOutput, requestType, now]
+    'INSERT INTO usage_stats (id, user_id, model, tokens_input, tokens_output, cost_cents, request_type, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+    [id, userId, model, tokensInput, tokensOutput, costCents, requestType, now]
   );
 }
 

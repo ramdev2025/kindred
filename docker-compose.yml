@@ -38,6 +38,9 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/src/db/schema.sql:/docker-entrypoint-initdb.d/001_schema.sql
+      - ./backend/src/db/migrations/001_mcp_oauth.sql:/docker-entrypoint-initdb.d/002_mcp_oauth.sql
+      - ./backend/src/db/migrations/002_session_summaries.sql:/docker-entrypoint-initdb.d/003_session_summaries.sql
+      - ./backend/src/db/migrations/003_project_files.sql:/docker-entrypoint-initdb.d/004_project_files.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U vibe_user -d vibe_coding"]
       interval: 5s
@@ -81,7 +84,7 @@ services:
     build:
       context: ./service
       dockerfile: Dockerfile
-    container_name: vibe_hermes
+    container_name: vibe_research
     env_file:
       - .env
     depends_on:

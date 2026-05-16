@@ -12,6 +12,7 @@ import { databasesRouter } from './routes/databases';
 import { deployRouter } from './routes/deploy';
 import { templatesRouter } from './routes/templates';
 import { billingRouter } from './routes/billing';
+import { researchRouter } from './routes/research';
 import { chatRateLimiter, uploadRateLimiter, sandboxRateLimiter } from './middleware/rateLimiter';
 import { requireTokenBudget, requireSandboxBudget } from './middleware/quotaGuard';
 import { initDatabase } from './db';
@@ -51,6 +52,7 @@ app.use('/api/databases', databasesRouter);
 app.use('/api/deploy', deployRouter);
 app.use('/api/templates', templatesRouter);
 app.use('/api/billing', billingRouter);
+app.use('/api/research', chatRateLimiter, requireTokenBudget as any, researchRouter);
 
 // Error handler
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

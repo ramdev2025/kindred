@@ -1,17 +1,38 @@
-from pydantic import BaseModel
+"""
+Pydantic models for the Deep Research ADK service.
+"""
+
+from pydantic import BaseModel, Field
 from typing import Optional
 
 
-class ReasonRequest(BaseModel):
-    prompt: str
-    context: Optional[str] = None
-    session_id: Optional[str] = None
-    max_tokens: int = 4096
-    temperature: float = 0.3
+class ResearchRequest(BaseModel):
+    message: str = Field(..., description="The developer's research question or task.")
+    user_id: str = Field(..., description="Clerk user ID — used to scope sessions.")
+    context: Optional[str] = Field(
+        None,
+        description="Optional project context (tech stack, existing code, constraints).",
+    )
 
 
-class ReasonResponse(BaseModel):
-    response: str
-    tokens_used: int
-    model: str
-    reasoning_steps: list[str] = []
+class ResearchResponse(BaseModel):
+    session_id: str
+    status: str  # streaming | awaiting_input | complete | error
+    message: str = "Research session started. Connect to the SSE stream."
+
+
+class HumanInputRequest(BaseModel):
+    answer: str = Field(..., description="The developer's answer to the agent's question.")
+
+
+class HumanInputResponse(BaseModel):
+    session_id: str
+    status: str
+    message: str
+
+
+class SessionStatusResponse(BaseModel):
+    session_id: str
+    status: str
+    pending_question: Optional[str] = None
+    created_at: str

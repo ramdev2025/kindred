@@ -15,28 +15,42 @@ sandboxRouter.use(requireAuth as any);
 sandboxRouter.post('/create', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { projectId } = req.body;
-    if (!projectId) {
-      return res.status(400).json({ error: 'projectId is required' });
-    }
+    if (!projectId) return res.status(400).json({ error: 'projectId is required' });
 
     const result = await e2b.createSandbox(projectId);
 
-    // Update project with sandbox info
-    await db.updateProject(projectId, {
-      e2b_sandbox_id: result.sandboxId,
-      preview_url: result.url,
-    });
+    await db.updateProject(projectId, { e2b_sandbox_id: result.sandboxId });
 
-    // Track sandbox usage against quota
     try {
       const user = getUserByClerkIdSQLite(req.clerkId!) as any;
       if (user) incrementSandboxUsage(user.id);
     } catch {}
 
-    res.json({ sandboxId: result.sandboxId, url: result.url });
+    // Return only the sandboxId — preview URL is set after first deploy
+    res.json({ sandboxId: result.sandboxId });
   } catch (error: any) {
     console.error('[Sandbox] Create error:', error.message);
     res.status(500).json({ error: 'Failed to create sandbox', details: error.message });
+  }
+});
+
+/**
+ * POST /api/sandbox/connect
+ * Reconnect to an existing E2B sandbox after a backend restart or page refresh.
+ * Body: { sandboxId: string; projectId: string }
+ */
+sandboxRouter.post('/connect', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { sandboxId, projectId } = req.body;
+    if (!sandboxId || !projectId) {
+      return res.status(400).json({ error: 'sandboxId and projectId are required' });
+    }
+    const result = await e2b.connectSandbox(sandboxId, projectId);
+    res.json(result);
+  } catch (error: any) {
+    console.error('[Sandbox] Connect error:', error.message);
+    // 410 Gone = sandbox expired, frontend should start a new one
+    res.status(410).json({ error: error.message, expired: true });
   }
 });
 
@@ -180,8 +194,9 @@ sandboxRouter.get('/preview-url/:sandboxId/:port', async (req: AuthenticatedRequ
  * Body: { sandboxId: string; files: Array<{ path: string; content: string; language?: string }> }
  */
 sandboxRouter.post('/deploy', async (req: AuthenticatedRequest, res: Response) => {
-  const { sandboxId, files } = req.body as {
+  const { sandboxId, projectId, files } = req.body as {
     sandboxId: string;
+    projectId?: string;
     files: Array<{ path: string; content: string; language?: string }>;
   };
 
@@ -189,7 +204,6 @@ sandboxRouter.post('/deploy', async (req: AuthenticatedRequest, res: Response) =
     return res.status(400).json({ error: 'sandboxId and a non-empty files array are required' });
   }
 
-  // SSE headers
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -206,6 +220,11 @@ sandboxRouter.post('/deploy', async (req: AuthenticatedRequest, res: Response) =
     const result = await deployToSandbox(sandboxId, files, (line) =>
       send({ type: 'log', content: line }),
     );
+
+    // Persist preview URL so it survives page refreshes
+    if (result.success && result.previewUrl && projectId) {
+      await db.updateProject(projectId, { preview_url: result.previewUrl }).catch(() => {});
+    }
 
     send({ type: 'done', ...result });
     res.end();

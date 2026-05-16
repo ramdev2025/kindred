@@ -89,7 +89,8 @@ export async function streamMessage(
   onToken?: (token: string) => void,
   onInfo?: (info: any) => void,
   onDone?: (data: { model: string; tokensUsed: number; sessionId?: string; contextStats?: ContextStats }) => void,
-  onError?: (error: string) => void
+  onError?: (error: string) => void,
+  skill?: string,
 ) {
   const response = await fetch(`${API_BASE}/api/chat/stream`, {
     method: 'POST',
@@ -97,7 +98,7 @@ export async function streamMessage(
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${token}`,
     },
-    body: JSON.stringify({ message, projectId, preferredModel, attachments }),
+    body: JSON.stringify({ message, projectId, preferredModel, attachments, skill }),
   });
 
   if (!response.ok) {
@@ -170,6 +171,7 @@ export function streamAgenticMessage(
   attachments?: Array<{ fileId: string }>,
   maxIterations?: number,
   callbacks?: AgenticCallbacks,
+  skill?: string,
 ): AbortController {
   const controller = new AbortController();
 
@@ -181,7 +183,7 @@ export function streamAgenticMessage(
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify({ message, projectId, preferredModel, sandboxId, maxIterations, attachments }),
+        body: JSON.stringify({ message, projectId, preferredModel, sandboxId, maxIterations, attachments, skill }),
         signal: controller.signal,
       });
 
@@ -267,11 +269,29 @@ export async function getProjectSession(token: string, projectId: string) {
 }
 
 // --- Sandbox API ---
-export async function createSandbox(token: string, projectId: string) {
+export async function createSandbox(token: string, projectId: string): Promise<{ sandboxId: string }> {
   const res = await api.post('/api/sandbox/create', { projectId }, {
     headers: { Authorization: `Bearer ${token}` },
   });
   return res.data;
+}
+
+export async function connectSandbox(
+  token: string,
+  sandboxId: string,
+  projectId: string,
+): Promise<{ sandboxId: string; previewUrl: string | null }> {
+  const res = await api.post('/api/sandbox/connect', { sandboxId, projectId }, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data;
+}
+
+export async function getProject(token: string, projectId: string) {
+  const res = await api.get(`/api/projects/${projectId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data.project as { id: string; name: string; e2b_sandbox_id?: string; preview_url?: string };
 }
 
 export async function executeSandboxCommand(token: string, sandboxId: string, command: string) {
@@ -328,6 +348,7 @@ export async function deployFiles(
   onLog?: (line: string) => void,
   onDone?: (result: { success: boolean; previewUrl?: string | null; filesWritten: number; error?: string }) => void,
   onError?: (error: string) => void,
+  projectId?: string,
 ): Promise<void> {
   const response = await fetch(`${API_BASE}/api/sandbox/deploy`, {
     method: 'POST',
@@ -335,7 +356,7 @@ export async function deployFiles(
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ sandboxId, files }),
+    body: JSON.stringify({ sandboxId, files, projectId }),
   });
 
   if (!response.ok) {

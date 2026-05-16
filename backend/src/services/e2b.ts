@@ -6,15 +6,16 @@ interface SandboxInstance {
   projectId: string;
 }
 
-// Track active sandboxes
 const activeSandboxes = new Map<string, SandboxInstance>();
 
-/**
- * Create a new E2B sandbox for a project
- */
-export async function createSandbox(projectId: string): Promise<{ sandboxId: string; url?: string }> {
+// ── Create ────────────────────────────────────────────────────────────────────
+
+export async function createSandbox(
+  projectId: string,
+): Promise<{ sandboxId: string }> {
   const sandbox = await Sandbox.create({
     apiKey: process.env.E2B_API_KEY,
+    timeoutMs: 30 * 60 * 1000, // 30-minute inactivity timeout
   });
 
   activeSandboxes.set(sandbox.sandboxId, {
@@ -23,51 +24,114 @@ export async function createSandbox(projectId: string): Promise<{ sandboxId: str
     projectId,
   });
 
-  console.log(`[E2B] Sandbox created: ${sandbox.sandboxId} for project ${projectId}`);
-
-  return {
-    sandboxId: sandbox.sandboxId,
-    url: `https://${sandbox.sandboxId}.e2b.dev`,
-  };
+  console.log(`[E2B] Sandbox created: ${sandbox.sandboxId}`);
+  return { sandboxId: sandbox.sandboxId };
 }
 
-/**
- * Execute code in an existing sandbox
- */
-export async function executeInSandbox(sandboxId: string, code: string): Promise<{
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-}> {
-  const instance = activeSandboxes.get(sandboxId);
-  if (!instance) {
-    throw new Error(`Sandbox ${sandboxId} not found`);
+// ── Connect (reconnect after restart / page refresh) ─────────────────────────
+
+export async function connectSandbox(
+  sandboxId: string,
+  projectId: string,
+): Promise<{ sandboxId: string; previewUrl: string | null }> {
+  // Already in memory — nothing to do
+  if (activeSandboxes.has(sandboxId)) {
+    return { sandboxId, previewUrl: getPreviewUrl(sandboxId) };
   }
 
-  const execution = await instance.sandbox.runCode(code);
+  try {
+    const sandbox = await Sandbox.connect(sandboxId, {
+      apiKey: process.env.E2B_API_KEY,
+    });
 
-  return {
-    stdout: execution.logs.stdout.join('\n'),
-    stderr: execution.logs.stderr.join('\n'),
-    exitCode: execution.error ? 1 : 0,
-  };
+    activeSandboxes.set(sandboxId, { sandbox, createdAt: new Date(), projectId });
+    console.log(`[E2B] Sandbox reconnected: ${sandboxId}`);
+    return { sandboxId, previewUrl: getPreviewUrl(sandboxId) };
+  } catch (err: any) {
+    console.error(`[E2B] Reconnect failed for ${sandboxId}: ${err.message}`);
+    throw new Error(`Sandbox ${sandboxId} is no longer available. Please start a new one.`);
+  }
 }
 
+// ── Preview URL ───────────────────────────────────────────────────────────────
+
 /**
- * Run a terminal command in the sandbox
+ * Returns a fully-qualified https:// URL for the given port.
+ * E2B's getHost() returns just the hostname (no protocol).
  */
-export async function runCommand(sandboxId: string, command: string): Promise<{
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-}> {
+export function getPreviewUrl(sandboxId: string, port = 3000): string | null {
   const instance = activeSandboxes.get(sandboxId);
-  if (!instance) {
-    throw new Error(`Sandbox ${sandboxId} not found`);
+  if (!instance) return null;
+
+  try {
+    const host = instance.sandbox.getHost(port);
+    if (!host) return null;
+    return host.startsWith('http') ? host : `https://${host}`;
+  } catch {
+    // Fallback: E2B public URL format is https://{port}-{sandboxId}.e2b.dev
+    return `https://${port}-${sandboxId}.e2b.dev`;
   }
+}
 
-  const result = await instance.sandbox.commands.run(command);
+// ── Command runner with auto-reconnect ────────────────────────────────────────
 
+async function getInstance(sandboxId: string): Promise<SandboxInstance> {
+  const instance = activeSandboxes.get(sandboxId);
+  if (instance) return instance;
+
+  // Attempt silent reconnect (backend restarted but sandbox still lives)
+  try {
+    const sandbox = await Sandbox.connect(sandboxId, {
+      apiKey: process.env.E2B_API_KEY,
+    });
+    const reconnected = { sandbox, createdAt: new Date(), projectId: 'unknown' };
+    activeSandboxes.set(sandboxId, reconnected);
+    console.log(`[E2B] Auto-reconnected: ${sandboxId}`);
+    return reconnected;
+  } catch {
+    throw new Error(
+      `Sandbox ${sandboxId} not found. It may have timed out — please start a new sandbox.`,
+    );
+  }
+}
+
+// ── File operations ───────────────────────────────────────────────────────────
+
+export async function writeFile(
+  sandboxId: string,
+  path: string,
+  content: string,
+): Promise<void> {
+  const { sandbox } = await getInstance(sandboxId);
+  await sandbox.files.write(path, content);
+}
+
+export async function readFile(sandboxId: string, path: string): Promise<string> {
+  const { sandbox } = await getInstance(sandboxId);
+  return sandbox.files.read(path);
+}
+
+export async function listFiles(
+  sandboxId: string,
+  path = '/',
+): Promise<Array<{ name: string; type: 'file' | 'dir'; path: string }>> {
+  const { sandbox } = await getInstance(sandboxId);
+  const entries = await sandbox.files.list(path);
+  return entries.map((e: any) => ({
+    name: e.name,
+    type: e.type === 'dir' ? 'dir' : 'file',
+    path: e.path || `${path}/${e.name}`.replace(/\/\//g, '/'),
+  }));
+}
+
+// ── Command execution ─────────────────────────────────────────────────────────
+
+export async function runCommand(
+  sandboxId: string,
+  command: string,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const { sandbox } = await getInstance(sandboxId);
+  const result = await sandbox.commands.run(command);
   return {
     stdout: result.stdout,
     stderr: result.stderr,
@@ -75,33 +139,21 @@ export async function runCommand(sandboxId: string, command: string): Promise<{
   };
 }
 
-/**
- * Write a file to the sandbox filesystem
- */
-export async function writeFile(sandboxId: string, path: string, content: string): Promise<void> {
-  const instance = activeSandboxes.get(sandboxId);
-  if (!instance) {
-    throw new Error(`Sandbox ${sandboxId} not found`);
-  }
-
-  await instance.sandbox.files.write(path, content);
+export async function executeInSandbox(
+  sandboxId: string,
+  code: string,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const { sandbox } = await getInstance(sandboxId);
+  const execution = await sandbox.runCode(code);
+  return {
+    stdout: execution.logs.stdout.join('\n'),
+    stderr: execution.logs.stderr.join('\n'),
+    exitCode: execution.error ? 1 : 0,
+  };
 }
 
-/**
- * Read a file from the sandbox filesystem
- */
-export async function readFile(sandboxId: string, path: string): Promise<string> {
-  const instance = activeSandboxes.get(sandboxId);
-  if (!instance) {
-    throw new Error(`Sandbox ${sandboxId} not found`);
-  }
+// ── Lifecycle ─────────────────────────────────────────────────────────────────
 
-  return await instance.sandbox.files.read(path);
-}
-
-/**
- * Kill a sandbox
- */
 export async function destroySandbox(sandboxId: string): Promise<void> {
   const instance = activeSandboxes.get(sandboxId);
   if (instance) {
@@ -111,53 +163,22 @@ export async function destroySandbox(sandboxId: string): Promise<void> {
   }
 }
 
-/**
- * Get sandbox status
- */
-export function getSandboxStatus(sandboxId: string): { active: boolean; projectId?: string; createdAt?: Date } {
+export function getSandboxStatus(
+  sandboxId: string,
+): { active: boolean; projectId?: string; createdAt?: Date } {
   const instance = activeSandboxes.get(sandboxId);
   if (!instance) return { active: false };
   return { active: true, projectId: instance.projectId, createdAt: instance.createdAt };
 }
 
-/**
- * List all active sandboxes
- */
-export function listActiveSandboxes(): Array<{ sandboxId: string; projectId: string; createdAt: Date }> {
-  return Array.from(activeSandboxes.entries()).map(([id, instance]) => ({
+export function listActiveSandboxes(): Array<{
+  sandboxId: string;
+  projectId: string;
+  createdAt: Date;
+}> {
+  return Array.from(activeSandboxes.entries()).map(([id, i]) => ({
     sandboxId: id,
-    projectId: instance.projectId,
-    createdAt: instance.createdAt,
+    projectId: i.projectId,
+    createdAt: i.createdAt,
   }));
-}
-
-/**
- * List files in a sandbox directory
- */
-export async function listFiles(sandboxId: string, path: string = '/'): Promise<Array<{ name: string; type: 'file' | 'dir'; path: string }>> {
-  const instance = activeSandboxes.get(sandboxId);
-  if (!instance) {
-    throw new Error(`Sandbox ${sandboxId} not found`);
-  }
-
-  const entries = await instance.sandbox.files.list(path);
-  return entries.map((entry: any) => ({
-    name: entry.name,
-    type: entry.type === 'dir' ? 'dir' : 'file',
-    path: entry.path || `${path}/${entry.name}`.replace(/\/\//g, '/'),
-  }));
-}
-
-/**
- * Get the public URL for a port running in the sandbox
- */
-export function getPreviewUrl(sandboxId: string, port: number = 3000): string | null {
-  const instance = activeSandboxes.get(sandboxId);
-  if (!instance) return null;
-
-  try {
-    return instance.sandbox.getHost(port);
-  } catch {
-    return `https://${sandboxId}-${port}.e2b.dev`;
-  }
 }

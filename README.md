@@ -2,32 +2,34 @@
 
 # Kindred AI Studio
 
-A full-stack webapp that lets users build applications via natural-language vibe coding. Uses intelligent AI model routing between Gemini 2.5 Pro, GPT-5.4, and a Hermes reasoning agent. Code executes in secure E2B cloud sandboxes with live previews.
+A full-stack vibe coding platform — describe what you want to build in natural language and watch it generate, deploy, and live-preview your application inside a secure cloud sandbox.
 
-## 🚀 What's New (v2.0)
+## What's New (v3.0)
 
-- **Zero-Dependency Architecture:** Completely migrated from Redis to an integrated SQLite architecture (WAL mode) for caching, rate limiting, and job queuing.
-- **Monetization & Quotas:** Usage-based billing with tiered limits (Free/Pro/Team) enforced across token usage and sandbox deployments.
-- **PayPal Integration:** Fully integrated end-to-end PayPal checkout for upgrading user pricing tiers instantly.
-- **Template Marketplace:** A beautiful new Template Picker UI allowing users to jump-start projects via built-in framework scaffolds (React SPA, Express API, etc.).
-- **Production VM Deployment:** Simplified one-click VM deployment with a new `deploy.sh` script, securing the stack behind an Nginx reverse proxy.
+- **Expert Skill System:** Three built-in AI personas — 💻 Software Engineer, 🚀 DevOps, and 🔒 Security — each with a distinct system prompt, routing preference, and error-fix strategy.
+- **Deep Research Agent:** Google ADK-powered programmer specialist with web search and human-in-the-loop clarification, rendered as a collapsible step trail inline in the chat thread.
+- **Inline Agentic Bubble:** Every AI generation now shows a collapsible process trail (Thinking → Generating → Deploying → Fixing) attached to each message.
+- **Sandbox Persistence:** Sandboxes are restored automatically on page refresh via `Sandbox.connect()`. Preview URLs are persisted to the database after the first successful deploy.
+- **Zero-Dependency Architecture:** SQLite (WAL mode) handles caching, rate limiting, and job queuing — no Redis required.
 
-## ✨ Core Features
+## Core Features
 
-- **Multi-Model Intelligence:** Intelligent automatic routing between Gemini 2.5 Pro (speed), GPT-5.4 (complex generation), and a Hermes agent (deep reasoning).
-- **Live Cloud Sandboxes:** Instant code execution and live previews via E2B Code Interpreter.
-- **Modern Interface:** Highly polished Next.js React frontend featuring fluid animations, Monaco editor, and a dynamic usage dashboard.
-- **Secure Authentication:** Built-in Clerk Auth for seamless sign-in and session management.
+- **Multi-Model Routing:** Intelligent routing between Gemini 2.5 Pro and Claude Sonnet 4.6 based on task type and active skill.
+- **Live Cloud Sandboxes:** Code executes in E2B micro-VMs with auto-install, dev server startup, and live preview URLs.
+- **Agentic Fix Loop:** Deploy failures automatically trigger AI-generated fixes and redeploy — up to 3 iterations.
+- **Monaco Code Editor:** Edit generated files directly and deploy changes back to the sandbox with one click.
+- **Secure Auth:** Clerk authentication with automatic dashboard redirect for logged-in users.
 
 ## Tech Stack
 
 | Component | Technology |
-|-----------|-----------|
-| Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS, Clerk Auth, Monaco Editor |
-| Backend | Node.js, Express, TypeScript, Google Generative AI, OpenAI, E2B SDK, BullMQ |
-| Worker | Python 3.13, FastAPI, OpenAI (Hermes mock) |
-| Database | PostgreSQL 16 (user auth, MCP metadata) |
-| Cache/Queue | SQLite (WAL mode) |
+|---|---|
+| Frontend | Next.js, React, TypeScript, Tailwind CSS, Clerk, Monaco Editor, Framer Motion |
+| Backend | Node.js, Express, TypeScript, Google ADK, Vertex AI |
+| AI Models | Gemini 2.5 Pro (Vertex), Claude Sonnet 4.6 (Vertex) |
+| Research Agent | Python 3.13, FastAPI, Google ADK, `google_search` tool |
+| Database | PostgreSQL 16 (projects, chat, usage stats) |
+| Cache / Queue | SQLite WAL |
 | Sandboxes | E2B Code Interpreter |
 
 ## Prerequisites
@@ -35,7 +37,7 @@ A full-stack webapp that lets users build applications via natural-language vibe
 - Node.js 20+
 - Python 3.13+
 - Docker & Docker Compose
-- API keys for: Clerk, Google Gemini, OpenAI, E2B
+- API keys for: Clerk, Google Gemini (or GCP project for Vertex), E2B
 
 ## Quick Start
 
@@ -43,10 +45,10 @@ A full-stack webapp that lets users build applications via natural-language vibe
 
 ```bash
 cp .env.example .env
-# Edit .env and fill in your API keys
+# Edit .env — minimum required: CLERK keys, GOOGLE_GEMINI_API_KEY, E2B_API_KEY, DATABASE_URL
 ```
 
-### 2. Start Infrastructure (PostgreSQL)
+### 2. Start Infrastructure
 
 ```bash
 docker compose up postgres -d
@@ -65,43 +67,42 @@ npm run dev
 ```bash
 cd frontend
 npm install
-# Copy your Clerk keys to frontend/.env.local
+cp ../.env.example .env.local   # copy Clerk + API URL vars
 npm run dev
 ```
 
-### 5. Start Hermes Worker
+### 5. Start Research Agent
 
 ```bash
 cd service
 pip install -r requirements.txt
-python main.py
+uvicorn main:app --reload --port 8000
 ```
 
-### Production VM Deployment
-
-For a production deployment inside a Virtual Machine, a helper script is provided which will install Docker, generate security keys, and start the full stack behind an Nginx reverse proxy.
+### Production Deployment
 
 ```bash
 chmod +x deploy.sh
 ./deploy.sh
 ```
 
+Starts the full stack (Nginx + Postgres + Backend + Frontend + Research Agent) behind an SSL reverse proxy.
+
 ## Architecture
 
 ```
             [ Public Internet ]
-                   |
-            Nginx (Port 80)
-             /           \
-     ( / )  /             \ ( /api/* )
-           v               v
-Frontend (internal)  -->  Backend (internal)  -->  Hermes Worker (internal)
-     |                        |                           |
-  Clerk Auth                  |                        OpenAI API
+                    |
+             Nginx (80 / 443)
+            /               \
+    Frontend              Backend (ADK Orchestrator)
+    (Next.js)          /         |          \
+                Gemini 2.5   Claude 4.6   Research Agent
+                (Vertex)     (Vertex)     (FastAPI + ADK)
+                      \         |
+                    PostgreSQL + SQLite
                               |
-                     PostgreSQL & SQLite
-                              |
-                     E2B Sandbox (cloud)
+                    E2B Sandbox (cloud)
 ```
 
 ## API Endpoints
@@ -109,57 +110,54 @@ Frontend (internal)  -->  Backend (internal)  -->  Hermes Worker (internal)
 ### Backend (port 3001)
 
 | Method | Path | Description |
-|--------|------|-------------|
+|---|---|---|
 | GET | /health | Health check |
-| POST | /api/chat/send | Send message, get AI response |
-| GET | /api/chat/history/:sessionId | Get chat history |
-| GET | /api/projects | List user projects |
+| POST | /api/chat/stream | Stream AI response (SSE) |
+| POST | /api/chat/agentic | Agentic loop: generate → deploy → fix (SSE) |
+| GET | /api/chat/history/:sessionId | Chat history |
+| GET | /api/projects | List projects |
 | POST | /api/projects | Create project |
-| PATCH | /api/projects/:id | Update project |
-| DELETE | /api/projects/:id | Delete project |
+| GET | /api/projects/:id | Get project (includes sandbox ID) |
 | POST | /api/sandbox/create | Create E2B sandbox |
-| POST | /api/sandbox/execute | Execute code in sandbox |
+| POST | /api/sandbox/connect | Reconnect existing sandbox |
+| POST | /api/sandbox/deploy | Deploy files, start server (SSE) |
 | POST | /api/sandbox/command | Run terminal command |
-| DELETE | /api/sandbox/:id | Destroy sandbox |
+| GET | /api/sandbox/files/:id | List sandbox files |
 
-### Hermes Worker (port 8000)
+### Research Agent (port 8000)
 
 | Method | Path | Description |
-|--------|------|-------------|
+|---|---|---|
 | GET | /health | Health check |
-| POST | /reason | Deep reasoning (sync) |
-| POST | /reason/stream | Deep reasoning (streaming) |
+| POST | /research/start | Start a research session |
+| GET | /research/:id/stream | SSE stream of agent events |
+| POST | /research/:id/respond | Send human answer (HITL) |
+| GET | /research/:id/status | Session status |
 
-## Model Routing
+## Skill System
 
-The backend intelligently routes requests:
+The skill selector in the chat panel switches the AI's persona:
 
-- **Gemini 2.5 Pro** — Quick tasks, Q&A, small edits (fast + cost-effective)
-- **GPT-5.4** — Complex code generation, refactoring, full implementations
-- **Hermes** — Deep reasoning, architecture analysis, trade-off comparisons
-
-Users can override routing via the model selector in the chat UI.
+| Skill | Icon | Best for | Default model |
+|---|---|---|---|
+| Engineer | 💻 | Clean code, design patterns, full-stack | Gemini |
+| DevOps | 🚀 | Dockerfiles, CI/CD, IaC, cloud config | Gemini |
+| Security | 🔒 | OWASP, threat modeling, secure coding | Claude Sonnet |
 
 ## Environment Variables
 
-See `.env.example` for all required configuration. Key variables:
+See `.env.example` for the full list. Key variables:
 
-- `CLERK_SECRET_KEY` — Clerk backend secret
-- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` — Clerk frontend key
-- `GOOGLE_GEMINI_API_KEY` — Gemini API access
-- `OPENAI_API_KEY` — OpenAI API access
-- `E2B_API_KEY` — E2B sandbox provisioning
-- `DATABASE_URL` — PostgreSQL connection string
-- `PAYPAL_CLIENT_ID` — PayPal integration
-## Development
+| Variable | Required | Description |
+|---|---|---|
+| `CLERK_SECRET_KEY` | ✅ | Clerk backend secret |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | ✅ | Clerk frontend key |
+| `GOOGLE_GEMINI_API_KEY` | ✅* | Gemini API (AI Studio) |
+| `GOOGLE_CLOUD_PROJECT` | ✅* | GCP project ID (Vertex AI) |
+| `GOOGLE_GENAI_USE_VERTEXAI` | — | Set `TRUE` for Vertex AI |
+| `GEMINI_MODEL` | — | Defaults to `gemini-2.0-flash` |
+| `E2B_API_KEY` | ✅ | E2B sandbox provisioning |
+| `DATABASE_URL` | ✅ | PostgreSQL connection string |
+| `RESEARCH_SERVICE_URL` | — | Defaults to `http://localhost:8000` |
 
-```bash
-# Backend type-check
-cd backend && npx tsc --noEmit
-
-# Frontend build
-cd frontend && npx next build
-
-# Hermes worker
-cd service && uvicorn main:app --reload
-```
+*One of AI Studio key OR Vertex AI project required.

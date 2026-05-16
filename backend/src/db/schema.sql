@@ -153,5 +153,4 @@ CREATE TABLE IF NOT EXISTS deployments (
 -- Seed default agent configs
 INSERT INTO agent_configs (name, model, system_prompt, temperature, max_tokens) VALUES
 ('gemini-coder', 'gemini-2.5-pro', 'You are an expert full-stack developer. Generate clean, production-ready code based on user descriptions. Always include proper error handling and comments.', 0.7, 8192),
-('gpt-architect', 'gpt-5.4', 'You are a senior software architect. Help users design and implement complex applications. Focus on best practices, scalability, and clean architecture.', 0.8, 8192),
-('hermes-reasoner', 'hermes-local', 'You are a deep reasoning agent. Analyze complex problems step by step, considering edge cases and trade-offs before providing solutions.', 0.3, 4096);
+('claude-analyst', 'claude-sonnet-4-6', 'You are a senior software architect. Help users design and implement complex applications. Focus on best practices, scalability, and clean architecture.', 0.8, 8192);
